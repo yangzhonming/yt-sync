@@ -15,6 +15,7 @@
     let reconnectAttempt = 0;
     let smoothedDelaySec = 0;
     let lastAckAt = 0;
+    let connectStartedAt = 0;
 
     function clearTimers() {
       clearInterval(heartbeatTimer);
@@ -46,6 +47,7 @@
 
     function connect(code, clientId) {
       intentionalClose = false;
+      connectStartedAt = Date.now();
       roomCode = code;
       if (clientId) currentClientId = clientId;
       clearTimers();
@@ -218,6 +220,12 @@
       return Boolean(ws && ws.readyState === WebSocket.OPEN);
     }
 
+    function isConnectingOrConnected() {
+      return Boolean(
+        ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
+      );
+    }
+
     function setBackgroundSuspended(val) {
       backgroundSuspended = Boolean(val);
       if (backgroundSuspended) {
@@ -226,18 +234,30 @@
       }
     }
 
-    function probeOrReconnect({ onAlive } = {}) {
+    function probeOrReconnect({ onAlive, forceReconnect = false } = {}) {
       if (intentionalClose || !roomCode) return "idle";
       clearTimeout(probeTimer);
       probeTimer = null;
       pendingProbeCb = null;
 
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
+      if (
+        !forceReconnect &&
+        ws &&
+        ws.readyState === WebSocket.CONNECTING &&
+        Date.now() - connectStartedAt < 6000
+      ) {
+        return "connecting";
+      }
+
+      if (forceReconnect || !ws || ws.readyState !== WebSocket.OPEN) {
         clearTimers();
         reconnectAttempt = 0;
-        handlers.onReconnecting?.();
         connect(roomCode, currentClientId);
         return "reconnecting";
+      }
+
+      if (!onAlive && lastAckAt > 0 && Date.now() - lastAckAt < 1500) {
+        return "alive";
       }
 
       pendingProbeCb = onAlive || null;
@@ -245,7 +265,6 @@
         pendingProbeCb = null;
         clearTimers();
         reconnectAttempt = 0;
-        handlers.onReconnecting?.();
         connect(roomCode, currentClientId);
         return "reconnecting";
       }
@@ -254,9 +273,8 @@
         pendingProbeCb = null;
         clearTimers();
         reconnectAttempt = 0;
-        handlers.onReconnecting?.();
         connect(roomCode, currentClientId);
-      }, CONFIG.PROBE_TIMEOUT_MS || 2000);
+      }, CONFIG.PROBE_TIMEOUT_MS || 600);
       return "probing";
     }
 
@@ -280,6 +298,7 @@
       probeOrReconnect,
       setBackgroundSuspended,
       isConnected,
+      isConnectingOrConnected,
     };
   }
 

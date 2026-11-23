@@ -241,20 +241,12 @@ assert.equal(ctrlC.totalDelay, 0.08);
 await clientB.expectNoMessage("CONTROL", 300);
 console.log("6. [PASS] Active-only CONTROL reached C (0.08s delay) and skipped AWAY peer B");
 
-// 7. keepAway frozen return peek + fresh follow
+// 7. keepAway 1-hop instant return peek (no ASK_STATE) + fresh follow (ASK_STATE)
 clientB.send({ type: "SYNC_PULL", videoId: "peppa_01", keepAway: true });
-const askPeek = await clientA.waitFor("ASK_STATE");
-clientA.send({
-  type: "REPORT_STATE",
-  requesterPeerId: askPeek.requesterPeerId,
-  videoId: "peppa_01",
-  currentTime: 85.0,
-  playbackRate: 1.5,
-  playing: true,
-});
 const frozenInitB = await clientB.waitFor("INIT_STATE");
-assert.equal(frozenInitB.currentTime, 85.0);
+assert.ok(frozenInitB.currentTime >= 70.0);
 assert.equal(frozenInitB.activeCount, 2);
+await clientA.expectNoMessage("ASK_STATE", 150);
 
 clientB.send({ type: "SYNC_PULL", videoId: "peppa_01", keepAway: false });
 const askFresh = await clientA.waitFor("ASK_STATE");
@@ -269,9 +261,9 @@ clientA.send({
 const freshInitB = await clientB.waitFor("INIT_STATE");
 assert.equal(freshInitB.currentTime, 90.0);
 assert.equal(freshInitB.activeCount, 3);
-console.log("7. [PASS] keepAway peek fetched state while staying inactive, then fresh follow raised activeCount to 3");
+console.log("7. [PASS] keepAway 1-hop peek avoided ASK_STATE roundtrip, then fresh follow aligned to 90s");
 
-// 8. Same-clientId replacement: C2 replaces C without touching A or B
+// 8. Same-clientId replacement + mode=resume outdated video auto-follows partner's new video
 const clientC2 = createClient("ClientC2", "ClientC");
 await clientC2.ready;
 const kickedC = await clientC.waitFor("KICKED");
@@ -279,7 +271,12 @@ assert.equal(kickedC.type, "KICKED");
 const closeC = await clientC.waitClose();
 assert.equal(closeC.code, 4002);
 
-clientC2.send({ type: "HELLO", videoId: "peppa_01", videoTitle: "小猪佩奇第一集" });
+clientC2.send({ type: "HELLO", videoId: "old_kpop", videoTitle: "旧Kpop", mode: "resume" });
+const autoNav = await clientC2.waitFor("NAVIGATE");
+assert.equal(autoNav.videoId, "peppa_01");
+assert.equal(autoNav.autoFollow, true);
+
+clientC2.send({ type: "SYNC_PULL", videoId: "peppa_01", videoTitle: "小猪佩奇第一集" });
 const askC2 = await clientA.waitFor("ASK_STATE");
 clientA.send({
   type: "REPORT_STATE",
@@ -291,7 +288,7 @@ clientA.send({
 });
 const initC2 = await clientC2.waitFor("INIT_STATE");
 assert.equal(initC2.activeCount, 3);
-console.log("8. [PASS] Same-clientId reconnect C2 replaced C cleanly without kicking A or B");
+console.log("8. [PASS] Same-clientId reconnect + resume outdated video auto-followed peppa_01");
 
 // 9. refPeerId automatic handoff on AWAY + SEARCHING -> PEER_SEARCHING allowlist & relay
 clientA.send({ type: "AWAY" });

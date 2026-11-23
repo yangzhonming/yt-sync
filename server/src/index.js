@@ -97,6 +97,26 @@ export class SyncRoom extends DurableObject {
     };
   }
 
+  async buildFreshInitState(targetDelay, activeCount, videoId, now = Date.now()) {
+    const state = await this.getRoomState();
+    if (
+      state &&
+      state.videoId &&
+      now - (state.serverAt || 0) <= ROOM_STATE_FRESH_MS &&
+      (!videoId || state.videoId === videoId)
+    ) {
+      const snap = this.extrapolateRoomState(state, targetDelay || 0, now);
+      const version = (await this.ctx.storage.get("version")) || 1;
+      return {
+        type: "INIT_STATE",
+        ...snap,
+        version,
+        activeCount,
+      };
+    }
+    return null;
+  }
+
   gcAndGetSockets(now = Date.now()) {
     const live = [];
     for (const ws of this.ctx.getWebSockets()) {
@@ -442,6 +462,21 @@ export class SyncRoom extends DurableObject {
         if (otherActives.length === 0) {
           if (updated.videoId && !updated.away) {
             await this.ctx.storage.put("refPeerId", updated.peerId);
+            const state = await this.getRoomState();
+            if (state?.videoId !== updated.videoId) {
+              await this.updateRoomState(
+                {
+                  videoId: updated.videoId,
+                  videoTitle: updated.videoTitle || "",
+                  currentTime: 0,
+                  playbackRate: 1,
+                  playing: false,
+                  sourcePeerId: updated.peerId,
+                  sourceDelay: updated.delay || 0,
+                },
+                { persist: true }
+              );
+            }
           }
           safeSend(ws, { type: "WAITING", activeCount: active.length });
           return;
@@ -452,6 +487,17 @@ export class SyncRoom extends DurableObject {
         const refMeta = getMeta(refWs);
 
         if (refMeta?.videoId && updated.videoId && refMeta.videoId !== updated.videoId) {
+          if (msg.mode === "resume") {
+            await this.ctx.storage.put("refPeerId", refMeta.peerId);
+            await this.setNavigatingPeers([updated.peerId]);
+            safeSend(ws, {
+              type: "NAVIGATE",
+              videoId: refMeta.videoId,
+              videoTitle: refMeta.videoTitle || "",
+              autoFollow: true,
+            });
+            return;
+          }
           safeSend(ws, {
             type: "CONFLICT",
             peerVideoId: refMeta.videoId,
@@ -489,6 +535,18 @@ export class SyncRoom extends DurableObject {
 
         if (refMeta?.videoId && updated.videoId && refMeta.videoId === updated.videoId) {
           await this.ctx.storage.put("refPeerId", refMeta.peerId);
+          if (msg.keepAway) {
+            const fastInit = await this.buildFreshInitState(
+              updated.delay,
+              active.length,
+              updated.videoId,
+              now
+            );
+            if (fastInit) {
+              safeSend(ws, fastInit);
+              return;
+            }
+          }
           safeSend(refWs, { type: "ASK_STATE", requesterPeerId: updated.peerId });
           return;
         }
@@ -546,6 +604,29 @@ export class SyncRoom extends DurableObject {
 
         if (!msg.fallbackOnly && otherActives.length > 0) {
           const refWs = this.getReferenceSocket(otherActives, refPeerId);
+          const refMeta = getMeta(refWs);
+          if (refMeta?.videoId && updated.videoId && refMeta.videoId !== updated.videoId) {
+            await this.setNavigatingPeers([updated.peerId]);
+            safeSend(ws, {
+              type: "NAVIGATE",
+              videoId: refMeta.videoId,
+              videoTitle: refMeta.videoTitle || "",
+              autoFollow: true,
+            });
+            return;
+          }
+          if (msg.keepAway) {
+            const fastInit = await this.buildFreshInitState(
+              updated.delay,
+              active.length,
+              updated.videoId || msg.videoId,
+              now
+            );
+            if (fastInit) {
+              safeSend(ws, fastInit);
+              return;
+            }
+          }
           if (!msg.keepAway) {
             for (const peer of otherActives) {
               safeSend(peer, { type: "ROOM_STATUS", activeCount: active.length });
@@ -555,23 +636,36 @@ export class SyncRoom extends DurableObject {
           return;
         }
 
-        const state = await this.getRoomState();
-        const targetVid = updated.videoId || msg.videoId;
-        if (
-          state &&
-          state.videoId &&
-          now - (state.serverAt || 0) <= ROOM_STATE_FRESH_MS &&
-          (!targetVid || state.videoId === targetVid)
-        ) {
-          const snap = this.extrapolateRoomState(state, updated.delay || 0, now);
-          const version = (await this.ctx.storage.get("version")) || 1;
-          safeSend(ws, {
-            type: "INIT_STATE",
-            ...snap,
-            version,
-            activeCount: active.length,
-          });
-          return;
+        if (otherActives.length === 0 && updated.videoId && !updated.away) {
+          await this.ctx.storage.put("refPeerId", updated.peerId);
+          const state = await this.getRoomState();
+          if (state?.videoId !== updated.videoId) {
+            await this.updateRoomState(
+              {
+                videoId: updated.videoId,
+                videoTitle: updated.videoTitle || "",
+                currentTime: 0,
+                playbackRate: 1,
+                playing: false,
+                sourcePeerId: updated.peerId,
+                sourceDelay: updated.delay || 0,
+              },
+              { persist: true }
+            );
+          }
+        }
+
+        if (msg.fallbackOnly) {
+          const fallbackInit = await this.buildFreshInitState(
+            updated.delay,
+            active.length,
+            updated.videoId || msg.videoId,
+            now
+          );
+          if (fallbackInit) {
+            safeSend(ws, fallbackInit);
+            return;
+          }
         }
 
         safeSend(ws, { type: "WAITING", activeCount: active.length });
