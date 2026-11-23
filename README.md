@@ -17,19 +17,22 @@
 
 - **原画质对等同步与延迟补偿**
   - 实时同步播放、暂停、拖拽进度（200ms 防抖）、倍速变化与同站点切集；
-  - 结合 `HEARTBEAT` 往返时延测算并补偿双跳网络延迟（$d_{\text{source}} + d_{\text{target}}$）；
+  - 结合 `HEARTBEAT` 往返时延平滑测算并补偿双跳网络延迟（`发送端单程延迟 + 接收端单程延迟`）；
   - 每 5 秒随心跳附带三档漂移校准（偏差 `< 0.4s` 忽略、`0.4s ~ 2.0s` 以 `±5%` 倍速微调追齐、`> 2.0s` 直接跳转对齐）；
-  - 消费即释放的本地操作锁（Echo Guard + 400ms TTL），防止双端操作反弹死循环。
+  - 播/停状态幂等去重 + 跳转目标账本（`±0.8s` 回声吸收与 4 路撕单保护），消除双端操作反弹乒乓死循环。
 - **广播房间 + 四合一心跳活跃机制**
   - 取消严苛的 2 人槽位与强制踢人，支持 2 人及小群多设备协同（软上限 16 连接）；
   - 5 秒四合一 `HEARTBEAT` 同时完成测延迟、刷新活跃状态、上报基准快照与捎带下发 `drift` 微调；
   - 同设备凭 `clientId` 自动顶替旧连接；超过 20 秒无心跳自动降为非活跃跳过广播（不踢人、不打断别人），10 分钟无流量自动垃圾回收。
-- **顺应后台听音与手机切后台保护**
-  - 切去其他标签页或锁屏时不再强行暂停视频，后台播放声音及通知栏拖动进度依然可正常同步；
-  - 若在网页隐藏状态（`hidden`）下触发暂停，前端直接拦截外发 `CONTROL(pause)`（避免操作系统冻结发送缓冲区并在解锁时把电脑暴力拉回）；
-  - 切回前台第 0 毫秒先锁住本地外发并拉取同伴最新进度：差距 `≤ 3s` 无感解锁恢复；差距 `> 3s` 弹出居中双铭牌动态计时二选一卡片（**跟随对方最新秒数** / **将大家拉回离开前秒数**），弹窗期间冻结决策不被带跑。
+- **统一前后台对齐盾与移动端息屏保护**
+  - 第一个人点击同步等待期间保持正常播放（不强制暂停），对方进房后直接拉取实时秒数并对齐；
+  - 切去其他标签页或锁屏时若视频处于播放态，支持顺应后台听音；若处于暂停态，则本地标记暂离并**挂起后台自动重连**、暂停进度上报与 `ASK_STATE` 响应，防止息屏断连抢跑或污染房间基准时间；
+  - 任何页面重新回到前台时，先屏蔽外发并经 **600ms 心跳探活 / 重连** 查询对方实时进度：
+    - **自己落后对方 `> 3s`**：弹出居中双铭牌动态计时二选一卡片（**跟随对方最新秒数** / **将大家拉回离开前秒数**），即使还在重连中点按钮也会排队等待连上后自动兑现；
+    - **差距 `≤ 3s` 或己方领先**：不弹窗不打断，挂上 `initGuardUntil` 保护期后静默恢复或无感对齐；
+    - 若对齐期间用户主动点播/按快捷键，右上角立即展示带旋转 `<progress>` 指示器的「正在对齐进度…」胶囊与轻提示，兼顾不丢信令与交互反馈。
 - **无感自动续连（标签页生命周期绑定）**
-  - 结合 `window.sessionStorage` 与 `chrome.storage.local`（6 小时 TTL）以及 BFcache `pagehide` / `pageshow` 恢复；手机黑屏、断网或系统回收页面重载后自动认领同步标签页并重连，无需重新打开 Popup；仅在主动点断开或关掉标签页时清理会话。
+  - 结合 `window.sessionStorage` 与 `chrome.storage.local`（6 小时 TTL）以及 BFcache `pagehide` / `pageshow` 恢复；手机黑屏、断网或系统回收页面重载后自动认领同步标签页并重连，同时拦截黑屏销毁视频导致的 `00:00` 脏进度污染。
 - **实用观影辅助能力**
   - **纯 Popup「先看模式」**：在弹窗内随时切出同步独立快进看，退出时自动对齐同步成员（支持双人各自先看状态机）；
   - **内置快捷键与倍速插件冲突提醒**：同步中支持 `A`（`-0.1x`）、`D`（`+0.1x`）、`S`（`1.0x`）快捷键调速并右上角提示；若倍速在 600ms 内被 Global Speed 等第三方插件强行改回，自动拦截回传并弹出警告提示（15 秒冷却防刷屏）；
@@ -37,6 +40,132 @@
   - **YouTube 广告避让 & 移动端解锁**：自动识别 `.ad-showing` 广告并暂挂同步；移动端拦截自动播放时展示一键点击解锁遮罩。
 - **三层极简深色 Popup UI**
   - 顶部状态与活跃人数 + 分级延迟徽章（`<80ms` / `80~180ms` / `>180ms`），独立配对码框（默认 `YT-8899`，点击全选、随机生成、一键复制），桌面/手机触屏均直观无需悬停猜按钮；任意网页支持一键切回同步标签页或在空白页先 `/peek` 房间并自动新开视频页直达。
+
+---
+
+## 📐 同步架构与核心设计（开发者导读）
+
+整套系统由 **1 条浏览器 ↔ Cloudflare Durable Object 的 WebSocket 长连接** 承载全部控制面信令，媒体流完全走用户本地到视频平台的直连通道。
+
+### 一、三层同步机制
+
+1. **事件驱动即时同步层（`CONTROL`）**：[`engine.js`](extension/content/sync/engine.js) 监听 `<video>` 的 `play`、`pause`、`seeked`、`ratechange` 与 SPA 切集。任意一端产生有效操作，立即发出携带 `action`、时间戳、倍速的 `CONTROL`；服务端 [`index.js`](server/src/index.js) 将操作者设为主视角**基准源（`refPeerId`）**，分配严格递增 `version`，附加双方单程延迟和 `totalDelay` 转发给其余活跃成员。
+2. **单基准源房间时钟层（`refPeerId` + `roomState`）**：房间仅认 1 位基准源写入内存快照 `roomState`，避免双端互追引发抖动。基准源按以下 3 条规则确定：首个带视频进房者、最近发送 `CONTROL` 的操作者、或原基准源超过 20 秒无心跳（或离开/`AWAY`）后按活跃优先级自动接管。
+3. **5 秒心跳保活与漂移纠偏层（`HEARTBEAT` + `drift`）**：双端每 5 秒发送一次 `HEARTBEAT` 测量 RTT 与探活；服务端仅将**基准源**的非暂离快照写入 `roomState`（`persist: false` 纯内存零落盘），并仅为**非基准源**下发推算后的 `drift`，播放态下按 `<0.4s` / `0.4~2.0s (±5%)` / `>2.0s (seek)` 三档静默追齐。
+
+### 二、WebSocket 信令数据流速查表
+
+| 阶段 | 客户端 → 服务端 | 服务端 → 客户端 | 用途说明 |
+| :--- | :--- | :--- | :--- |
+| **进房与重连握手** | `HELLO`（`initial` / `resume`）<br>`CONFLICT_DECISION`<br>`SYNC_PULL` / `READY`<br>`REPORT_STATE` | `WAITING`（房间仅 1 人）<br>`CONFLICT`（片源不一致）<br>`NAVIGATE`（强制或自动跳片）<br>`ASK_STATE`（向基准源取实时进度）<br>`INIT_STATE`（含延迟补偿与 `version`）<br>`ROOM_STATUS` / `SYNC_READY` | 首次对齐片源与秒数；前台回归时查询对方最新状态（`fallbackOnly: true` 仅作兜底直读 `roomState`） |
+| **日常播控同步** | `CONTROL`（`play` / `pause` / `seek` / `rate` / `video_change`） | `CONTROL`（附带 `totalDelay` 与单调 `version`） | 毫秒级同步操作并切换 `refPeerId` |
+| **心跳保活与纠偏** | `HEARTBEAT`（时间戳 `t`、单程 `delay`、播放快照；暂离时发 `{}` 空包） | `HEARTBEAT_ACK`（回传 `t`、活跃数、`revived`、`drift`） | 测算 RTT、探测半开假死、维持房间活跃、下发漂移校准 |
+| **状态与辅助提示** | `LEAVE`<br>`SOLO_ENTER` / `SOLO_EXIT`<br>`STATUS` / `SEARCHING` | `PEER_LEFT`<br>`PEER_STATUS` / `STATUS` / `PEER_SEARCHING`<br>`SOLO_WAITING_PEER` | 退出提示、先看模式、广告避让与搜索选片联动 |
+
+### 三、客户端状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> idle: 打开视频页
+
+    state "未连接 idle" as idle
+    state "等待对方 waiting" as waiting
+    state "视频冲突 conflict" as conflict
+    state "同步观看 synced" as synced
+    state "先看模式 solo" as solo
+    state "本地暂离 away" as away
+    state "切回对账 returning" as returning
+    state "二选一弹窗 decision" as decision
+    state "断线重连 reconnecting" as reconnecting
+
+    idle --> waiting: 点击开始同步并发送 HELLO
+    waiting --> synced: 同视频对端入房收到 INIT_STATE 或 ROOM_STATUS
+    waiting --> conflict: 不同视频收到 CONFLICT
+    conflict --> synced: 弹窗选定片源并完成跳转对齐
+
+    synced --> solo: 开启先看模式
+    solo --> synced: 退出先看模式并追齐进度
+
+    synced --> away: hidden 且暂停 或 后台触发暂停
+    synced --> returning: hidden 后重新 visible 切回前台
+    away --> returning: 恢复前台唤醒并重启探活重连
+    returning --> decision: 落后对方大于 3 秒展示二选一卡片
+    returning --> synced: 差距不大于 3 秒或己方领先时静默解锁
+    decision --> synced: 选跟随发 SYNC_PULL 或 选拉回发 CONTROL
+
+    synced --> reconnecting: 断网或 12 秒心跳超时
+    reconnecting --> synced: 重连后发 HELLO 重新对齐
+    synced --> waiting: 对方退出收到 PEER_LEFT 并本地暂停
+
+    waiting --> idle: 主动断开
+    synced --> idle: 主动断开并发送 LEAVE
+```
+
+### 四、三阶段核心信令交互时序图
+
+```mermaid
+sequenceDiagram
+    participant B as 手机端 B
+    participant S as 云端房间 DO
+    participant A as 电脑端 A
+
+    Note over B,A: 阶段一 首连不断流对齐
+    A->>S: HELLO initial 视频V
+    S-->>A: WAITING 房间1人 保持继续播放
+    B->>S: HELLO initial 视频V
+    S->>A: ASK_STATE 请求基准端实时状态
+    A-->>S: REPORT_STATE 当前秒数与播放态
+    S-->>B: INIT_STATE 含延迟补偿
+    S-->>A: ROOM_STATUS 2人已同步
+
+    Note over B,A: 阶段二 日常播控与每5秒心跳微调
+    A->>S: CONTROL 操作 A成为基准源
+    S-->>B: 转发 CONTROL 带 version 与 totalDelay
+    loop 每5秒四合一心跳
+        A->>S: HEARTBEAT 上报进度写入 roomState
+        S-->>A: HEARTBEAT_ACK 无 drift
+        B->>S: HEARTBEAT 上报自身进度
+        S-->>B: HEARTBEAT_ACK 附带 drift 仅双播时追齐
+    end
+
+    Note over B,A: 阶段三 后台暂停或息屏切回与统一对账
+    Note over B: hidden且暂停 设 isAway 挂起后台重连 并停答 ASK_STATE
+    Note over A: 电脑端 A 完全不受影响 继续播到 10分30秒
+    Note over B: 重新 visible 锁死外发 本地落后大于3s先秒弹卡片
+    B->>S: 空 HEARTBEAT 探活 不带旧进度防污染缓存
+    alt 600ms 内收到 ACK 连接活着
+        S-->>B: HEARTBEAT_ACK
+        B->>S: SYNC_PULL 拉取精确进度
+    else 600ms 无回音 连接假死或已断开
+        B->>S: 重连 WebSocket
+        B->>S: onOpen 后发 HELLO resume 并挂1秒兜底
+    end
+    S->>A: ASK_STATE
+    A-->>S: REPORT_STATE 10分30秒
+    S-->>B: INIT_STATE 原地校准卡片时间
+    Note over B: 按钮若在重连中点击则排队 等 onOpen 再发 HELLO 加 CONTROL 或 SYNC_PULL
+```
+
+### 五、关键工程小设计（开发者避坑指南）
+
+1. **如何把同步延迟压到无感**
+   - **EWMA 平滑单程延迟前向补偿**：[`ws-client.js`](extension/content/transport/ws-client.js) 按 `0.7 × 旧值 + 0.3 × 新采样` 过滤网络毛刺，计算 `delay = RTT / 2`；服务端打包双端延迟之和 `totalDelay`，接收端仅在 `playing === true` 时将目标秒数前推 `currentTime + totalDelay × playbackRate`。
+   - **变速微调代替频繁 `seek`**：播放器一旦硬跳就会清空缓冲重拉分片；`0.4s ~ 2.0s` 漂移改用 `1.05x / 0.95x` 倍速追齐，`pause` 指令的对表容忍度也放宽到 `1.5s`。
+   - **首连不死等缓冲 & 慢跳转核对**：`waitVideoReady(1500)` 防止移动端 `readyState === 0` 卡死“等待中”，并挂一次性 `loadedmetadata` 监听在元数据就绪时按流逝时间追齐；单次拖动缓冲 `≥ 1500ms` 落地后自动触发一次探活核对。
+2. **防回声 / 防乒乓死循环机制**
+   - **播/停幂等状态 + 600ms 反向保护期**：`engine.js` 记录最后确认的房间播放态 `syncedPlaying`，重复 `play` / `pause` 直接跳过；远端写入本地触发的异步事件受 `remoteToggleGuardUntil` 屏蔽。
+   - **跳转目标账本与 4 路撕单**：放弃脆弱的固定时间锁，改用 `pendingRemoteSeekTarget` 记录远端目标秒数。`onSeeked` 落点在 `±0.8s` 内即判定回声吞噬并当场撕单；此外通过「正常完成 `seeked`」「`onTimeUpdate` 非寻址状态下走远 `> 2s`」「15 秒兜底过期」「生命周期/切断重置」四条路径保证账本永不死锁。
+   - **`CONTROL(seek)` 与播停解耦**：远端 `seek` 只定位进度（`isSeekOnly`）不改变当前播停态，彻底杜绝拖进度连带把对方按播或按停的乒乓连环跳。
+3. **移动端后台 / 息屏防反拉与防 `00:00` 坑位**
+   - **纯本地暂离 + 空心跳 + 停答 `ASK_STATE`**：手机后台暂停不再发云端 `AWAY`（避免双人房间反复切换与重回卡顿）；暂离期间心跳返回 `{}` 仅探连接通断、不把本地旧进度覆盖进服务端 `roomState` 也不回答对面 `ASK_STATE`，因此正在前端观看的领先方切换窗口时绝不会被后台暂停方误弹窗或反拉。
+   - **息屏暂停挂起后台重连**：页面 `hidden` 时若视频本就暂停，提前标 `isAway` 并调用 `wsClient.setBackgroundSuspended(true)`，防止熄屏断网在唤醒前偷偷以 `mode: "initial"` 重连从而跳过二选一卡片。
+   - **提前挂 `2500ms` 保护锁 + 真实手势识别拦截幽灵 `seeked / play`**：切回差距 `≤ 3s` 解锁时，在 `clearAwayState` **之前**先执行 `engine.armInitGuard(2500)`，彻底堵住解码器重新挂载期间触发的空窗回拉；同时监听 `pointerdown` / `pointerup` / `touchstart` / `touchend` / `keydown` 追踪真实用户手势，凡是 2 秒内无真实手势或位于后台、且落后对方 `> 3s` 的 `seeked / play`（`beforeEmitSeek` / `beforeEmitPlay`）一律拦截转入对账，而用户在正常观看时的手动拖回完全放行。
+   - **`lastHeardTime` 抗黑屏 `00:00` 污染**：[`saveHeardProgress`](extension/content/main.js) 持续持久化有效秒数并拒绝 `readyState < 1 || currentTime <= 0.5` 覆盖；页面黑屏销毁节点后再醒来时，通过 `resolveReliableAwayTime` 回溯黑屏前真实进度。
+   - **按钮排队兑现（`pendingResumeAction`）与防反拉窗口（`suppressInitUntil`）**：秒弹卡片状态下若用户点击「拉回」或「跟随」时连接仍在探活/重连，动作暂存并在 `onAlive` / `onOpen` 后才发射 `HELLO(resume) + CONTROL`，随后以 `suppressInitUntil` 屏蔽对面应答 `HELLO` 的旧进度 `INIT_STATE`；对齐窗口内用户手动按操作键还会立即弹出语义化 `<progress>` 旋转胶囊与轻提示「正在对齐对方进度，请稍候…」。
+4. **所有弹窗与提示卡片触发条件**
+   - **片源冲突选择卡（Popup 内）**：仅在首次进房（`mode: "initial"`）双方各自打开了不同 `videoId` 时弹出（「跟随对方视频 / 让对方看我的视频」）；切后台回归、在首页自动随片或同步中切集则直接自动跳转不打扰。
+   - **进度二选一恢复卡（页面居中 Modal）**：仅在满足「同视频」「记录到的离开秒数 `> 0.5s`」「回归对账发现**己方落后对方 `> 3.0s`**」时弹出（「跟随 XX:XX / 拉回 YY:YY」）；若差距 `≤ 3.0s` 或己方领先，则直接静默或无感追齐。
+   - **辅助弹窗**：对方离开触发居中断开卡（继续等待 / 断开退出）；移动端首次无手势起播触发红色一键解锁按钮；对方在搜索页触发右上角「一起挑片」可点击胶囊。
 
 ---
 
@@ -50,13 +179,13 @@
 │   │   └── service-worker.js     # 会话持久化、标签页管理与 /peek 探测
 │   ├── content/
 │   │   ├── config.js             # 服务端地址与同步定时器配置
-│   │   ├── main.js               # 内容脚本总控、切后台恢复、无感重连
+│   │   ├── main.js               # 内容脚本总控、统一回归对账、防 00:00 守护与排队兑现
 │   │   ├── adapters/
 │   │   │   ├── youtube.js        # YouTube 播放、SPA 路由、广告与搜索识别
 │   │   │   └── bilibili.js       # 哔哩哔哩适配器参考（当前暂不可用）
-│   │   ├── sync/engine.js        # 播控防抖、Echo Guard、三档漂移与倍速处理
-│   │   ├── transport/ws-client.js# WebSocket 四合一心跳、看门狗、2s 探活
-│   │   └── ui/overlay.js         # Shadow DOM 浮层（Toast、胶囊、动态恢复卡）
+│   │   ├── sync/engine.js        # 播控防抖、跳转账本、用户手势校验与三档漂移处理
+│   │   ├── transport/ws-client.js# WebSocket 四合一心跳、12s 看门狗、600ms 探活与挂起重连
+│   │   └── ui/overlay.js         # Shadow DOM 浮层（Toast、旋转对齐胶囊、动态恢复卡）
 │   ├── popup/                    # 浏览器弹窗 UI（HTML / CSS / JS）
 │   └── icons/                    # 扩展图标（16 / 48 / 128 + SVG）
 ├── server/                       # Cloudflare Workers + Durable Objects 服务端

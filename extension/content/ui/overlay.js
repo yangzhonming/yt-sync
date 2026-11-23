@@ -80,6 +80,80 @@
             }
             .pill.tone-orange .pill-dot { background: #fb923c; }
             .pill.tone-green .pill-dot { background: #34d399; }
+            progress.pill-spinner:indeterminate::-webkit-progress-bar {
+              display: none;
+              background: none;
+            }
+            progress.pill-spinner:indeterminate::-webkit-progress-value {
+              display: none;
+              background: none;
+            }
+            progress.pill-spinner:indeterminate::-moz-progress-bar {
+              display: none;
+              background: none;
+            }
+            progress.pill-spinner:indeterminate::slider-fill {
+              display: none;
+              background: none;
+            }
+            progress.pill-spinner:indeterminate {
+              --size: 12px;
+              --thickness: 2px;
+              --spinner-color: #fbbf24;
+              --track-color: rgba(251, 191, 36, 0.22);
+              --_used-spinner-duration: 1.1s;
+              flex-shrink: 0;
+              width: var(--size);
+              height: var(--size);
+              border-radius: 50%;
+              appearance: none;
+              margin: 0;
+              padding: 0;
+              border: 0;
+              background: conic-gradient(
+                  from 90deg,
+                  var(--spinner-color) 210deg,
+                  transparent 0
+                )
+                var(--track-color);
+              animation: progress-spin var(--_used-spinner-duration) linear infinite;
+            }
+            @supports (background-clip: border-area) {
+              progress.pill-spinner:indeterminate {
+                background-clip: border-area;
+                border: var(--thickness) solid transparent;
+                background-origin: border-box;
+              }
+            }
+            @supports not (background-clip: border-area) {
+              progress.pill-spinner:indeterminate {
+                --clip-boundary: calc(100% - var(--thickness));
+                mask-image: radial-gradient(
+                  farthest-side,
+                  transparent var(--clip-boundary),
+                  black var(--clip-boundary)
+                );
+                border: 0;
+              }
+            }
+            @media (forced-colors: active) {
+              progress.pill-spinner:indeterminate {
+                forced-color-adjust: none;
+                --spinner-color: CanvasText;
+                --track-color: Canvas;
+              }
+            }
+            .pill.tone-orange progress.pill-spinner:indeterminate {
+              --spinner-color: #fb923c;
+              --track-color: rgba(251, 146, 60, 0.22);
+            }
+            .pill.tone-green progress.pill-spinner:indeterminate {
+              --spinner-color: #34d399;
+              --track-color: rgba(52, 211, 153, 0.22);
+            }
+            @keyframes progress-spin {
+              to { rotate: 1turn; }
+            }
             .pill-action {
               margin-left: 4px;
               padding: 2px 9px;
@@ -242,6 +316,7 @@
             .unlock-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; }
             @media (prefers-reduced-motion: reduce) {
               .toast, .live-dot, .pill-dot { animation: none !important; transition: none !important; }
+              progress.pill-spinner:indeterminate { --_used-spinner-duration: 6s; }
             }
           </style>
           <div class="top-right" role="region" aria-label="同步通知" aria-live="polite">
@@ -318,18 +393,25 @@
         }, durationMs);
       },
 
-      setPill(text, { tone = "amber" } = {}) {
+      setPill(text, { tone = "amber", spinner = false } = {}) {
         ensureMounted();
         els.pill.textContent = "";
         if (!text) {
           els.pill.className = "pill";
           return;
         }
-        const dot = document.createElement("span");
-        dot.className = "pill-dot";
+        const indicator = spinner
+          ? document.createElement("progress")
+          : document.createElement("span");
+        if (spinner) {
+          indicator.className = "pill-spinner";
+          indicator.setAttribute("aria-label", text);
+        } else {
+          indicator.className = "pill-dot";
+        }
         const span = document.createElement("span");
         span.textContent = text;
-        els.pill.append(dot, span);
+        els.pill.append(indicator, span);
         els.pill.className = `pill is-visible tone-${tone}`;
       },
 

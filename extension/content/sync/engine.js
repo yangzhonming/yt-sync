@@ -8,7 +8,17 @@
     return `${m}:${r}`;
   }
 
-  function createSyncEngine({ adapter, overlay, send, onBackgroundPause }) {
+  function createSyncEngine({
+    adapter,
+    overlay,
+    send,
+    onBackgroundPause,
+    onProgressTick,
+    onSlowSeekFinished,
+    beforeEmitPlay,
+    beforeEmitSeek,
+    onBlockedAction,
+  }) {
     const { CONFIG } = root;
 
     let active = false;
@@ -21,6 +31,21 @@
     let baseRate = 1;
     let lastAppliedVersion = 0;
     let initGuardUntil = 0;
+    let lastUserGestureAt = 0;
+
+    function markUserGesture() {
+      lastUserGestureAt = Date.now();
+    }
+
+    function hasRecentUserGesture(windowMs = 2000) {
+      return lastUserGestureAt > 0 && Date.now() - lastUserGestureAt < windowMs;
+    }
+
+    function notifyBlockedIfAligning() {
+      if (awayMode && !decisionLocked && !soloMode && active && hasRecentUserGesture(1500)) {
+        onBlockedAction?.();
+      }
+    }
 
     let lastRemoteRateSetAt = 0;
     let expectedRemoteRate = 1;
@@ -40,33 +65,58 @@
       }
     }
 
-    // Consume-to-release Echo Guard locks with 400ms TTL safety fallback.
-    const locks = { play: 0, pause: 0, seek: 0, rate: 0 };
+    // Idempotent state-based play/pause deduplication, target-based seek ledger,
+    // and ratechange lock.
+    const locks = { rate: 0 };
+    let syncedPlaying = null;
+    let remoteToggleGuardUntil = 0;
+    let pendingRemoteSeekTarget = null;
+    let pendingRemoteSeekAt = 0;
+    let pendingRemoteSeekIsAutoRealign = false;
+    let lastProgressTickAt = 0;
 
-    function armLock(type) {
-      locks[type] = Date.now() + CONFIG.ECHO_TTL_MS;
+    function armRateLock() {
+      locks.rate = Date.now() + CONFIG.ECHO_TTL_MS;
     }
 
-    function consumeLock(type) {
-      if (locks[type] > Date.now()) {
-        locks[type] = 0;
+    function consumeRateLock() {
+      if (locks.rate > Date.now()) {
+        locks.rate = 0;
         return true;
       }
-      locks[type] = 0;
+      locks.rate = 0;
       return false;
+    }
+
+    function setRemotePlayingTarget(playing) {
+      syncedPlaying = Boolean(playing);
+      remoteToggleGuardUntil = Date.now() + 600;
+    }
+
+    function setRemoteSeekTarget(targetTime, { isAutoRealign = false } = {}) {
+      pendingRemoteSeekTarget = targetTime;
+      pendingRemoteSeekAt = Date.now();
+      pendingRemoteSeekIsAutoRealign = Boolean(isAutoRealign);
+    }
+
+    function clearRemoteSeekTarget() {
+      pendingRemoteSeekTarget = null;
+      pendingRemoteSeekAt = 0;
+      pendingRemoteSeekIsAutoRealign = false;
     }
 
     function safePlay(video) {
       if (!video || !video.paused) return;
-      armLock("play");
+      setRemotePlayingTarget(true);
       const p = video.play();
       if (p && typeof p.catch === "function") {
         p.catch((err) => {
           if (err?.name === "NotAllowedError") {
+            syncedPlaying = false;
             overlay.showUnlock(() => {
               const v = adapter.getVideoElement();
               if (!v) return;
-              armLock("play");
+              setRemotePlayingTarget(true);
               v.play().catch(() => {});
               // Re-query latest state after unlocking on mobile.
               const vid = adapter.getVideoId();
@@ -86,7 +136,7 @@
     function forcePauseLocal() {
       const video = adapter.getVideoElement();
       if (video && !video.paused) {
-        armLock("pause");
+        setRemotePlayingTarget(false);
         video.pause();
       }
     }
@@ -121,7 +171,10 @@
       });
     }
 
-    function applyRemoteState(msg, { forceSeek = false, showToast = false } = {}) {
+    function applyRemoteState(
+      msg,
+      { forceSeek = false, showToast = false, isInitial = false, isAutoRealign = false } = {}
+    ) {
       if (inAd || soloMode || awayMode || decisionLocked) return;
       const localVid = adapter.getVideoId();
       if (msg.videoId && localVid && msg.videoId !== localVid) return;
@@ -142,26 +195,37 @@
         (Number(msg.currentTime) || 0) + (playing ? delay * rate : 0)
       );
 
+      const isSeekOnly = !isInitial && msg.action === "seek";
+      const isPauseAction = !isInitial && msg.action === "pause";
+      const seekThreshold = isPauseAction ? 1.5 : 0.4;
+
       baseRate = rate;
       catchupActive = false;
 
       if (Math.abs(video.playbackRate - rate) > 0.01) {
         lastRemoteRateSetAt = Date.now();
         expectedRemoteRate = rate;
-        armLock("rate");
+        armRateLock();
         video.playbackRate = rate;
       }
 
-      if (forceSeek || Math.abs(video.currentTime - targetTime) > 0.4) {
-        armLock("seek");
+      if (forceSeek || Math.abs(video.currentTime - targetTime) > seekThreshold) {
+        setRemoteSeekTarget(targetTime, { isAutoRealign });
         video.currentTime = targetTime;
       }
 
-      if (playing && video.paused) {
-        safePlay(video);
-      } else if (!playing && !video.paused) {
-        armLock("pause");
-        video.pause();
+      if (!isSeekOnly) {
+        if (playing) {
+          setRemotePlayingTarget(true);
+          if (video.paused) {
+            safePlay(video);
+          }
+        } else {
+          setRemotePlayingTarget(false);
+          if (!video.paused) {
+            video.pause();
+          }
+        }
       }
 
       if (showToast && msg.action) {
@@ -182,7 +246,7 @@
       clearPendingMeta();
       const receivedAt = Date.now();
       initGuardUntil = receivedAt + 1500;
-      applyRemoteState(msg, { forceSeek: true, showToast: false });
+      applyRemoteState(msg, { forceSeek: true, showToast: false, isInitial: true });
 
       const initialVideo = adapter.getVideoElement();
       if (initialVideo && initialVideo.readyState < 1) {
@@ -203,7 +267,7 @@
           initGuardUntil = Date.now() + 1500;
           applyRemoteState(
             { ...msg, currentTime: expectedTime, totalDelay: 0 },
-            { forceSeek: true, showToast: false }
+            { forceSeek: true, showToast: false, isInitial: true }
           );
         };
         initialVideo.addEventListener("loadedmetadata", onMeta);
@@ -236,7 +300,7 @@
         if (rateMismatch || timeMismatch || stateMismatch) {
           applyRemoteState(
             { ...msg, currentTime: expectedTime, totalDelay: 0 },
-            { forceSeek: timeMismatch, showToast: false }
+            { forceSeek: timeMismatch, showToast: false, isInitial: true }
           );
         }
       }, 900);
@@ -248,25 +312,31 @@
       if (!video || !videoId) return;
 
       const clamped = Math.max(0, Number(targetTime) || 0);
-      armLock("seek");
+      setRemoteSeekTarget(clamped);
       video.currentTime = clamped;
 
-      if (playing && video.paused) {
-        safePlay(video);
-      } else if (!playing && !video.paused) {
-        armLock("pause");
-        video.pause();
+      if (playing) {
+        setRemotePlayingTarget(true);
+        if (video.paused) {
+          safePlay(video);
+        }
+      } else {
+        setRemotePlayingTarget(false);
+        if (!video.paused) {
+          video.pause();
+        }
       }
 
-      send({
+      const payloadBase = {
         type: "CONTROL",
-        action: "seek",
         videoId,
         videoTitle: adapter.getVideoTitle(),
         currentTime: Number(clamped.toFixed(3)),
         playbackRate: baseRate,
         playing: Boolean(playing),
-      });
+      };
+      send({ ...payloadBase, action: "seek" });
+      send({ ...payloadBase, action: playing ? "play" : "pause" });
     }
 
     function handleDriftCheck(msg) {
@@ -277,7 +347,7 @@
       const video = adapter.getVideoElement();
       if (!video || !msg.playing || video.paused) {
         if (catchupActive && video) {
-          armLock("rate");
+          armRateLock();
           video.playbackRate = baseRate;
           catchupActive = false;
         }
@@ -292,7 +362,7 @@
 
       if (absDiff < 0.4) {
         if (catchupActive) {
-          armLock("rate");
+          armRateLock();
           video.playbackRate = baseRate;
           catchupActive = false;
         }
@@ -305,7 +375,7 @@
         if (Math.abs(video.playbackRate - rounded) > 0.005) {
           lastRemoteRateSetAt = Date.now();
           expectedRemoteRate = rounded;
-          armLock("rate");
+          armRateLock();
           video.playbackRate = rounded;
         }
         catchupActive = true;
@@ -313,28 +383,41 @@
       }
 
       if (catchupActive) {
-        armLock("rate");
+        armRateLock();
         video.playbackRate = baseRate;
         catchupActive = false;
       }
-      armLock("seek");
+      setRemoteSeekTarget(targetTime, { isAutoRealign: true });
       video.currentTime = targetTime;
     }
 
-    function isEventSuppressed(type) {
-      if (consumeLock(type)) return true;
-      if (awayMode || decisionLocked || soloMode || Date.now() < initGuardUntil) return true;
-      return !active || !synced || inAd;
-    }
-
     function onPlay() {
-      if (isEventSuppressed("play")) return;
+      if (awayMode || decisionLocked || soloMode || Date.now() < initGuardUntil) {
+        notifyBlockedIfAligning();
+        return;
+      }
+      if (!active || !synced || inAd) return;
+      if (syncedPlaying === true) return;
+      if (Date.now() < remoteToggleGuardUntil && syncedPlaying === false) return;
+      const video = boundVideo || adapter.getVideoElement();
+      const vid = adapter.getVideoId();
+      if (
+        beforeEmitPlay &&
+        beforeEmitPlay({
+          videoId: vid,
+          currentTime: video ? video.currentTime : null,
+          hadUserGesture: hasRecentUserGesture(2000),
+        }) === false
+      ) {
+        return;
+      }
+      syncedPlaying = true;
       emitControl("play");
     }
 
     function onPause() {
-      if (isEventSuppressed("pause")) return;
       if (document.visibilityState === "hidden") {
+        if (!active || soloMode || awayMode || decisionLocked || inAd) return;
         const video = boundVideo || adapter.getVideoElement();
         onBackgroundPause?.({
           videoId: adapter.getVideoId(),
@@ -342,21 +425,109 @@
         });
         return;
       }
+      if (awayMode || decisionLocked || soloMode || Date.now() < initGuardUntil) {
+        notifyBlockedIfAligning();
+        return;
+      }
+      if (!active || !synced || inAd) return;
+      if (syncedPlaying === false) return;
+      if (Date.now() < remoteToggleGuardUntil && syncedPlaying === true) return;
+      syncedPlaying = false;
       emitControl("pause");
     }
 
     function onSeeked() {
-      if (isEventSuppressed("seek")) return;
+      const video = boundVideo || adapter.getVideoElement();
+      if (!video) return;
+
+      if (pendingRemoteSeekTarget !== null) {
+        const elapsedMs = Date.now() - pendingRemoteSeekAt;
+        const isExpired = elapsedMs > 15000;
+        const isEcho =
+          !isExpired && Math.abs(video.currentTime - pendingRemoteSeekTarget) <= 0.8;
+        const wasAutoRealign = pendingRemoteSeekIsAutoRealign;
+        clearRemoteSeekTarget();
+        if (isEcho) {
+          if (
+            !wasAutoRealign &&
+            elapsedMs >= 1500 &&
+            !video.paused &&
+            active &&
+            synced &&
+            !awayMode &&
+            !decisionLocked &&
+            !soloMode &&
+            !inAd
+          ) {
+            onSlowSeekFinished?.({ videoId: adapter.getVideoId(), elapsedMs });
+          }
+          return;
+        }
+      }
+
+      if (awayMode || decisionLocked || soloMode || Date.now() < initGuardUntil) {
+        notifyBlockedIfAligning();
+        return;
+      }
+      if (!active || !synced || inAd) return;
       clearTimeout(seekDebounceTimer);
       seekDebounceTimer = setTimeout(() => {
-        if (!awayMode && !decisionLocked && !soloMode && Date.now() >= initGuardUntil) {
+        if (
+          active &&
+          synced &&
+          !inAd &&
+          !awayMode &&
+          !decisionLocked &&
+          !soloMode &&
+          Date.now() >= initGuardUntil
+        ) {
+          const curVideo = boundVideo || adapter.getVideoElement();
+          if (
+            beforeEmitSeek &&
+            curVideo &&
+            beforeEmitSeek({
+              videoId: adapter.getVideoId(),
+              currentTime: curVideo.currentTime,
+              hadUserGesture: hasRecentUserGesture(2000),
+            }) === false
+          ) {
+            return;
+          }
           emitControl("seek");
         }
       }, CONFIG.SEEK_DEBOUNCE_MS);
     }
 
+    function onTimeUpdate() {
+      const video = boundVideo || adapter.getVideoElement();
+      if (!video) return;
+
+      if (
+        pendingRemoteSeekTarget !== null &&
+        !video.seeking &&
+        (Date.now() - pendingRemoteSeekAt > 15000 ||
+          Math.abs(video.currentTime - pendingRemoteSeekTarget) > 2.0)
+      ) {
+        clearRemoteSeekTarget();
+      }
+
+      if (active && !inAd && !video.seeking && !video.paused && !awayMode && !decisionLocked) {
+        const now = Date.now();
+        if (now - lastProgressTickAt >= 1000) {
+          lastProgressTickAt = now;
+          onProgressTick?.({
+            videoId: adapter.getVideoId(),
+            currentTime: video.currentTime,
+            readyState: video.readyState,
+          });
+        }
+      }
+    }
+
     function onRateChange() {
-      if (isEventSuppressed("rate")) return;
+      if (consumeRateLock()) return;
+      if (awayMode || decisionLocked || soloMode || Date.now() < initGuardUntil) return;
+      if (!active || !synced || inAd) return;
       const video = boundVideo || adapter.getVideoElement();
       if (!video) return;
 
@@ -399,6 +570,11 @@
       const video = adapter.getVideoElement();
       if (!video) return;
 
+      if (awayMode && !decisionLocked && !soloMode && active) {
+        onBlockedAction?.();
+        return;
+      }
+
       e.preventDefault();
       e.stopPropagation();
 
@@ -415,7 +591,7 @@
       baseRate = nextRate;
       catchupActive = false;
       lastRemoteRateSetAt = 0;
-      armLock("rate");
+      armRateLock();
       video.playbackRate = nextRate;
       overlay.showToast(
         `${soloMode ? "先看倍速" : "倍速"} ${nextRate.toFixed(1)}x`,
@@ -433,8 +609,12 @@
       boundVideo.removeEventListener("play", onPlay);
       boundVideo.removeEventListener("pause", onPause);
       boundVideo.removeEventListener("seeked", onSeeked);
+      boundVideo.removeEventListener("timeupdate", onTimeUpdate);
       boundVideo.removeEventListener("ratechange", onRateChange);
       boundVideo = null;
+      syncedPlaying = null;
+      remoteToggleGuardUntil = 0;
+      clearRemoteSeekTarget();
     }
 
     function bindVideoIfNeeded() {
@@ -443,9 +623,13 @@
       unbindVideo();
       boundVideo = video;
       baseRate = video.playbackRate || 1;
+      if (syncedPlaying === null) {
+        syncedPlaying = !video.paused;
+      }
       video.addEventListener("play", onPlay);
       video.addEventListener("pause", onPause);
       video.addEventListener("seeked", onSeeked);
+      video.addEventListener("timeupdate", onTimeUpdate);
       video.addEventListener("ratechange", onRateChange);
     }
 
@@ -476,6 +660,11 @@
       lastAppliedVersion = 0;
       inAd = adapter.isAdPlaying();
       bindVideoIfNeeded();
+      window.addEventListener("pointerdown", markUserGesture, true);
+      window.addEventListener("pointerup", markUserGesture, true);
+      window.addEventListener("touchstart", markUserGesture, true);
+      window.addEventListener("touchend", markUserGesture, true);
+      window.addEventListener("keydown", markUserGesture, true);
       window.addEventListener("keydown", onKeyDown, true);
 
       videoPollTimer = setInterval(bindVideoIfNeeded, 800);
@@ -491,8 +680,18 @@
       decisionLocked = false;
       catchupActive = false;
       initGuardUntil = 0;
+      lastUserGestureAt = 0;
       lastRemoteRateSetAt = 0;
       lastConflictToastAt = 0;
+      syncedPlaying = null;
+      remoteToggleGuardUntil = 0;
+      lastProgressTickAt = 0;
+      clearRemoteSeekTarget();
+      window.removeEventListener("pointerdown", markUserGesture, true);
+      window.removeEventListener("pointerup", markUserGesture, true);
+      window.removeEventListener("touchstart", markUserGesture, true);
+      window.removeEventListener("touchend", markUserGesture, true);
+      window.removeEventListener("keydown", markUserGesture, true);
       window.removeEventListener("keydown", onKeyDown, true);
       clearTimeout(seekDebounceTimer);
       clearTimeout(initVerifyTimer);
@@ -510,7 +709,15 @@
       formatTime,
       setSynced(val) {
         synced = Boolean(val);
-        if (!synced) lastAppliedVersion = 0;
+        if (!synced) {
+          lastAppliedVersion = 0;
+          syncedPlaying = null;
+          remoteToggleGuardUntil = 0;
+          clearRemoteSeekTarget();
+        } else if (syncedPlaying === null) {
+          const v = boundVideo || adapter.getVideoElement();
+          if (v) syncedPlaying = !v.paused;
+        }
       },
       setAwayMode(val) {
         awayMode = Boolean(val);
@@ -520,6 +727,9 @@
       },
       setDecisionLocked(val) {
         decisionLocked = Boolean(val);
+      },
+      armInitGuard(durationMs = 2500) {
+        initGuardUntil = Math.max(initGuardUntil, Date.now() + durationMs);
       },
       isSoloMode: () => soloMode,
       isDecisionLocked: () => decisionLocked,

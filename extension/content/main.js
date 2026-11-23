@@ -21,24 +21,46 @@
   let awayTime = null;
   let awayVideoId = null;
   let awayStartedAt = 0;
+  let resumeCardOpen = false;
+  let resumeCardAwayTime = null;
+  let resumeCardVideoId = null;
+  let returnLinkConfirmed = false;
+  let pendingResumeAction = null;
+  let suppressInitUntil = 0;
+  let suppressRevivedUntil = 0;
+  let hiddenAt = 0;
+  let lastReturnAt = 0;
+  let returnCheckStartedAt = 0;
+  let lastPeerState = null;
   let pendingReturnChoice = false;
   let waitingSinceAt = 0;
   let returnFallbackTimer = null;
   let awaySafetyTimer = null;
+  let alignPillTimer = null;
+  let lastAlignToastAt = 0;
   let stopNavWatch = null;
   let wsClient = null;
   let engine = null;
 
-  function clearAwayState({ persist = true } = {}) {
+  function clearAwayState({ persist = true, hideCard = true } = {}) {
     clearTimeout(returnFallbackTimer);
     clearTimeout(awaySafetyTimer);
+    clearTimeout(alignPillTimer);
+    alignPillTimer = null;
     isAway = false;
     awayTime = null;
     awayVideoId = null;
     awayStartedAt = 0;
+    resumeCardOpen = false;
+    resumeCardAwayTime = null;
+    resumeCardVideoId = null;
+    returnCheckStartedAt = 0;
     pendingReturnChoice = false;
     engine?.setAwayMode(false);
     engine?.setDecisionLocked(false);
+    if (hideCard) {
+      overlay.hideResumeCard();
+    }
     if (persist) {
       saveTabSession({
         code: currentCode,
@@ -47,6 +69,22 @@
         awayStartedAt: 0,
       });
     }
+  }
+
+  function scheduleAwaySafetyCheck(delayMs = 10000) {
+    clearTimeout(awaySafetyTimer);
+    if (!returnCheckStartedAt) {
+      returnCheckStartedAt = Date.now();
+    }
+    awaySafetyTimer = setTimeout(() => {
+      if (resumeCardOpen || pendingResumeAction) return;
+      if (!pendingReturnChoice && !(isAway && !engine.isDecisionLocked())) return;
+      if (!wsClient.isConnected() && Date.now() - returnCheckStartedAt < 15000) {
+        scheduleAwaySafetyCheck(2500);
+        return;
+      }
+      clearAwayState({ persist: true });
+    }, delayMs);
   }
 
   function readTabSessionRaw() {
@@ -91,6 +129,79 @@
     }
   }
 
+  function saveHeardProgress(videoId, currentTime, { allowZero = false, readyState = 1 } = {}) {
+    if (!videoId || typeof currentTime !== "number" || !Number.isFinite(currentTime)) return;
+    if (!allowZero && (readyState < 1 || currentTime <= 0.5)) return;
+    saveTabSession({
+      code: currentCode,
+      lastHeardVideoId: videoId,
+      lastHeardTime: Number(currentTime.toFixed(2)),
+      lastHeardAt: Date.now(),
+    });
+  }
+
+  function resolveReliableAwayTime(videoId, rawTime) {
+    const video = adapter.getVideoElement();
+    if (
+      (!video || video.readyState >= 1) &&
+      typeof rawTime === "number" &&
+      Number.isFinite(rawTime) &&
+      rawTime > 0.5
+    ) {
+      return Number(rawTime.toFixed(2));
+    }
+    const tabSess = readTabSessionRaw();
+    if (
+      tabSess?.lastHeardVideoId === videoId &&
+      typeof tabSess.lastHeardTime === "number" &&
+      Number.isFinite(tabSess.lastHeardTime) &&
+      tabSess.lastHeardTime > 0.5
+    ) {
+      return Number(tabSess.lastHeardTime.toFixed(2));
+    }
+    if (
+      tabSess?.awayVideoId === videoId &&
+      typeof tabSess.awayTime === "number" &&
+      Number.isFinite(tabSess.awayTime) &&
+      tabSess.awayTime > 0.5
+    ) {
+      return Number(tabSess.awayTime.toFixed(2));
+    }
+    return null;
+  }
+
+  function recordPeerState(msg) {
+    if (
+      !msg ||
+      !msg.videoId ||
+      msg.action === "video_change" ||
+      typeof msg.currentTime !== "number" ||
+      !Number.isFinite(msg.currentTime)
+    ) {
+      return;
+    }
+    lastPeerState = {
+      videoId: msg.videoId,
+      currentTime: Number(msg.currentTime) || 0,
+      playbackRate: Number(msg.playbackRate) || 1,
+      playing: Boolean(msg.playing),
+      receivedAt: Date.now(),
+    };
+  }
+
+  function estimatePeerNow(videoId) {
+    if (!lastPeerState || !videoId || lastPeerState.videoId !== videoId) return null;
+    const elapsedSec = Math.max(0, (Date.now() - lastPeerState.receivedAt) / 1000);
+    if (elapsedSec > 600) return null;
+    return {
+      time:
+        lastPeerState.currentTime +
+        (lastPeerState.playing ? elapsedSec * lastPeerState.playbackRate : 0),
+      playing: lastPeerState.playing,
+      playbackRate: lastPeerState.playbackRate,
+    };
+  }
+
   function reportBgState(patch) {
     if (patch.uiState) {
       if (patch.uiState === "waiting" && currentUiState !== "waiting") {
@@ -115,7 +226,7 @@
       type: "SYNC_PULL",
       videoId: vid,
       videoTitle: adapter.getVideoTitle(),
-      keepAway: Boolean(pendingReturnChoice || isAway),
+      keepAway: false,
     });
   }
 
@@ -175,8 +286,8 @@
         type: "HELLO",
         videoId: adapter.getVideoId(),
         videoTitle: adapter.getVideoTitle(),
-        mode: pendingReturnChoice ? "resume" : "initial",
-        keepAway: Boolean(pendingReturnChoice || isAway),
+        mode: pendingReturnChoice || resumeCardOpen ? "resume" : "initial",
+        keepAway: false,
       });
     }
   }
@@ -193,17 +304,49 @@
 
   wsClient = root.createWsClient({
     getHeartbeatPayload() {
+      if (
+        isAway ||
+        pendingReturnChoice ||
+        resumeCardOpen ||
+        pendingResumeAction ||
+        engine?.isDecisionLocked()
+      ) {
+        return {};
+      }
       return engine.readSnapshot();
     },
 
     onOpen() {
       overlay.setPill("");
+      returnLinkConfirmed = true;
+      if (pendingResumeAction) {
+        flushPendingResumeAction("open");
+        return;
+      }
+      if (pendingReturnChoice) {
+        scheduleAwaySafetyCheck(10000);
+        clearTimeout(returnFallbackTimer);
+        returnFallbackTimer = setTimeout(() => {
+          if (pendingReturnChoice && wsClient.isConnected()) {
+            const vid = adapter.getVideoId();
+            if (vid) {
+              wsClient.send({
+                type: "SYNC_PULL",
+                videoId: vid,
+                videoTitle: adapter.getVideoTitle(),
+                keepAway: false,
+                fallbackOnly: true,
+              });
+            }
+          }
+        }, 1000);
+      }
       wsClient.send({
         type: "HELLO",
         videoId: adapter.getVideoId(),
         videoTitle: adapter.getVideoTitle(),
-        mode: pendingReturnChoice ? "resume" : "initial",
-        keepAway: Boolean(pendingReturnChoice || isAway),
+        mode: pendingReturnChoice || resumeCardOpen ? "resume" : "initial",
+        keepAway: false,
       });
     },
 
@@ -235,19 +378,28 @@
       if (
         ack.revived &&
         !isAway &&
+        !pendingResumeAction &&
+        !resumeCardOpen &&
+        Date.now() >= suppressInitUntil &&
+        Date.now() >= suppressRevivedUntil &&
         !engine.isSoloMode() &&
         !engine.isDecisionLocked() &&
         adapter.getVideoId()
       ) {
         const video = adapter.getVideoElement();
-        awayVideoId = adapter.getVideoId();
-        awayTime = video ? video.currentTime : null;
+        const revVid = adapter.getVideoId();
+        awayVideoId = revVid;
+        awayTime = resolveReliableAwayTime(revVid, video ? video.currentTime : null);
         awayStartedAt = Date.now() - 20000;
         isAway = true;
         engine.setAwayMode(true);
         saveTabSession({ code: currentCode, awayTime, awayVideoId, awayStartedAt });
         triggerReturnFromAway();
         return;
+      }
+
+      if (ack.drift) {
+        recordPeerState(ack.drift);
       }
 
       if (
@@ -271,8 +423,8 @@
           type: "HELLO",
           videoId: adapter.getVideoId(),
           videoTitle: adapter.getVideoTitle(),
-          mode: pendingReturnChoice ? "resume" : "initial",
-          keepAway: Boolean(pendingReturnChoice || isAway),
+          mode: pendingReturnChoice || resumeCardOpen ? "resume" : "initial",
+          keepAway: false,
         });
       } else if (currentUiState === "synced" && nextCount <= 1) {
         engine.setSynced(false);
@@ -286,6 +438,7 @@
     },
 
     onReconnecting() {
+      returnLinkConfirmed = false;
       engine.setSynced(false);
       overlay.setPill("断线重连中…", { tone: "orange" });
       reportBgState({ uiState: "reconnecting", conflict: null });
@@ -313,19 +466,23 @@
     async onMessage(msg) {
       switch (msg.type) {
         case "WAITING": {
-          const wasSynced = currentUiState === "synced";
-          if (pendingReturnChoice || isAway) {
-            clearAwayState({ persist: true });
-            wsClient.send({ type: "BACK" });
+          if (
+            (pendingReturnChoice || resumeCardOpen || pendingResumeAction) &&
+            typeof msg.activeCount === "number" &&
+            msg.activeCount >= 2
+          ) {
+            break;
+          }
+          if (pendingReturnChoice || isAway || resumeCardOpen || pendingResumeAction) {
+            pendingResumeAction = null;
+            clearAwayState({ persist: true, hideCard: true });
+            overlay.setPill("");
           } else {
             clearTimeout(returnFallbackTimer);
             clearTimeout(awaySafetyTimer);
           }
           engine.setSynced(false);
           overlay.hideDisconnectCard();
-          if (!wasSynced && adapter.getVideoId()) {
-            engine.forcePauseLocal();
-          }
           reportBgState({
             uiState: "waiting",
             activeCount: typeof msg.activeCount === "number" ? msg.activeCount : 1,
@@ -355,8 +512,8 @@
           overlay.hideDisconnectCard();
           overlay.setPill("");
           if (msg.autoFollow) {
-            clearAwayState({ persist: true });
-            wsClient.send({ type: "BACK" });
+            pendingResumeAction = null;
+            clearAwayState({ persist: true, hideCard: true });
             const title = msg.videoTitle ? `《${msg.videoTitle}》` : "新视频";
             overlay.showToast(`对方已切换至${title}，正在跟随`, 2000, "info");
           }
@@ -373,6 +530,9 @@
         }
 
         case "ASK_STATE": {
+          if (isAway || resumeCardOpen || pendingResumeAction) {
+            break;
+          }
           const snap = engine.readSnapshot();
           wsClient.send({
             type: "REPORT_STATE",
@@ -439,6 +599,26 @@
         case "INIT_STATE": {
           clearTimeout(returnFallbackTimer);
           clearTimeout(awaySafetyTimer);
+          clearTimeout(alignPillTimer);
+          alignPillTimer = null;
+          if (Date.now() < suppressInitUntil || pendingResumeAction?.type === "pull_back") {
+            const count =
+              typeof msg.activeCount === "number"
+                ? msg.activeCount
+                : Math.max(2, currentActiveCount);
+            currentActiveCount = count;
+            engine.setSynced(true);
+            overlay.setPill("");
+            reportBgState({
+              uiState: "synced",
+              activeCount: count,
+              latencyMs: currentLatencyMs,
+              conflict: null,
+              closePopup: true,
+            });
+            break;
+          }
+          recordPeerState(msg);
           if (msg.videoId && adapter.getVideoId() !== msg.videoId) {
             expectedRemoteVideoId = msg.videoId;
             adapter.navigateTo(msg.videoId);
@@ -451,7 +631,7 @@
               : Math.max(2, currentActiveCount);
           currentActiveCount = count;
 
-          if (pendingReturnChoice) {
+          if (pendingReturnChoice || resumeCardOpen) {
             pendingReturnChoice = false;
             const rate = Number(msg.playbackRate) || 1;
             const peerNow = Math.max(
@@ -459,23 +639,35 @@
               (Number(msg.currentTime) || 0) +
                 (msg.playing ? (Number(msg.totalDelay) || 0) * rate : 0)
             );
-            const savedAwayTime = awayTime;
-            const savedAwayVid = awayVideoId;
-
-            if (
+            const savedAwayTime = resumeCardOpen ? resumeCardAwayTime : awayTime;
+            const savedAwayVid = resumeCardOpen ? resumeCardVideoId : awayVideoId;
+            const hasComparableAway =
               savedAwayVid &&
               msg.videoId === savedAwayVid &&
               typeof savedAwayTime === "number" &&
-              Math.abs(peerNow - savedAwayTime) > 3.0
-            ) {
+              savedAwayTime > 0.5;
+            const lagSec = hasComparableAway ? peerNow - savedAwayTime : 0;
+
+            if (hasComparableAway && lagSec > 3.0) {
               awayTime = null;
               awayVideoId = null;
               awayStartedAt = 0;
-              engine.setDecisionLocked(true);
-              engine.setAwayMode(true);
-              engine.setSynced(true);
-              engine.forcePauseLocal();
+              openOrUpdateResumeCard({
+                savedAwayVid,
+                savedAwayTime,
+                peerNow,
+                peerPlaying: Boolean(msg.playing),
+                peerRate: rate,
+                count,
+              });
+              break;
+            }
+
+            if (hasComparableAway && savedAwayTime - peerNow > 3.0) {
+              engine.armInitGuard(1500);
+              clearAwayState({ persist: true, hideCard: true });
               overlay.setPill("");
+              engine.setSynced(true);
               reportBgState({
                 uiState: "synced",
                 activeCount: count,
@@ -483,42 +675,25 @@
                 conflict: null,
                 closePopup: true,
               });
-              overlay.showResumeCard({
-                awayTimeSec: savedAwayTime,
-                peerTimeSec: peerNow,
-                peerPlaying: Boolean(msg.playing),
-                peerRate: rate,
-                formatTime: engine.formatTime,
-                onFollowCurrent() {
-                  clearAwayState({ persist: true });
-                  const vid = adapter.getVideoId();
-                  if (vid) {
-                    wsClient.send({
-                      type: "SYNC_PULL",
-                      videoId: vid,
-                      videoTitle: adapter.getVideoTitle(),
-                      keepAway: false,
-                    });
-                  }
-                  overlay.showToast("正在跟进对方最新进度", 1600, "info");
-                },
-                async onPullBack() {
-                  clearAwayState({ persist: true });
-                  wsClient.send({ type: "BACK" });
-                  await adapter.waitVideoReady();
-                  engine.seekAndSyncTo(savedAwayTime, { playing: true });
-                  overlay.showToast(
-                    `已将大家拉回 ${engine.formatTime(savedAwayTime)}`,
-                    1800,
-                    "success"
-                  );
-                },
-              });
               break;
             }
 
-            clearAwayState({ persist: true });
-            wsClient.send({ type: "BACK" });
+            engine.armInitGuard(2500);
+            clearAwayState({ persist: true, hideCard: true });
+            const localVideo = adapter.getVideoElement();
+            const localPlaying = Boolean(localVideo && !localVideo.paused);
+            if (localVideo && localPlaying === Boolean(msg.playing)) {
+              overlay.setPill("");
+              engine.setSynced(true);
+              reportBgState({
+                uiState: "synced",
+                activeCount: count,
+                latencyMs: currentLatencyMs,
+                conflict: null,
+                closePopup: true,
+              });
+              break;
+            }
           }
 
           overlay.setPill("");
@@ -540,7 +715,11 @@
         }
 
         case "CONTROL": {
-          if (engine.isSoloMode() || engine.isDecisionLocked()) return;
+          if (engine.isSoloMode()) return;
+          if (msg.action !== "video_change") {
+            recordPeerState(msg);
+          }
+          if (engine.isDecisionLocked() || pendingReturnChoice) return;
           overlay.setPill("");
           if (msg.action === "video_change" && msg.videoId) {
             if (adapter.getVideoId() !== msg.videoId) {
@@ -582,7 +761,11 @@
         }
 
         case "PEER_LEFT": {
-          clearAwayState({ persist: true });
+          pendingResumeAction = null;
+          returnLinkConfirmed = false;
+          suppressInitUntil = 0;
+          suppressRevivedUntil = 0;
+          clearAwayState({ persist: true, hideCard: true });
           currentActiveCount = 1;
           engine.setSoloMode(false);
           engine.setSynced(false);
@@ -611,25 +794,91 @@
     },
   });
 
+  function shieldLaggingAction(
+    videoId,
+    currentTime,
+    { hadUserGesture = false, checkRecentReturn = false } = {}
+  ) {
+    if (!videoId || typeof currentTime !== "number" || !Number.isFinite(currentTime)) {
+      return true;
+    }
+    const peer = estimatePeerNow(videoId);
+    const isLagging = Boolean(peer && peer.time - currentTime > 3.0);
+    const recentlyReturned =
+      checkRecentReturn && lastReturnAt > 0 && Date.now() - lastReturnAt < 15000;
+    if (isLagging && (!hadUserGesture || document.visibilityState === "hidden" || recentlyReturned)) {
+      const reliableTime = resolveReliableAwayTime(videoId, currentTime);
+      awayVideoId = videoId;
+      awayTime = reliableTime;
+      awayStartedAt = awayStartedAt || Date.now();
+      isAway = true;
+      engine.setAwayMode(true);
+      engine.forcePauseLocal();
+      saveTabSession({ code: currentCode, awayTime, awayVideoId, awayStartedAt });
+      if (document.visibilityState === "visible") {
+        triggerReturnFromAway();
+      }
+      return false;
+    }
+    return true;
+  }
+
   engine = root.createSyncEngine({
     adapter,
     overlay,
-    send: (payload) => wsClient.send(payload),
+    send(payload) {
+      if (payload?.type === "CONTROL" && payload.action !== "video_change") {
+        recordPeerState(payload);
+      }
+      return wsClient.send(payload);
+    },
+    onProgressTick({ videoId, currentTime, readyState }) {
+      saveHeardProgress(videoId, currentTime, { allowZero: false, readyState });
+    },
+    onSlowSeekFinished() {
+      if (wsClient.isConnected() && !isAway && !engine.isSoloMode() && !engine.isDecisionLocked()) {
+        wsClient.probeOrReconnect({ onAlive() {} });
+      }
+    },
+    beforeEmitPlay({ videoId, currentTime, hadUserGesture }) {
+      return shieldLaggingAction(videoId, currentTime, {
+        hadUserGesture,
+        checkRecentReturn: true,
+      });
+    },
+    beforeEmitSeek({ videoId, currentTime, hadUserGesture }) {
+      return shieldLaggingAction(videoId, currentTime, {
+        hadUserGesture,
+        checkRecentReturn: false,
+      });
+    },
+    onBlockedAction() {
+      if (pendingReturnChoice && !resumeCardOpen) {
+        clearTimeout(alignPillTimer);
+        alignPillTimer = null;
+        overlay.setPill("正在对齐进度…", { tone: "amber", spinner: true });
+        const now = Date.now();
+        if (now - lastAlignToastAt > 1200) {
+          lastAlignToastAt = now;
+          overlay.showToast("正在对齐对方进度，请稍候…", 1400, "info");
+        }
+      }
+    },
     onBackgroundPause({ videoId, currentTime }) {
       if (
-        (currentUiState === "synced" || currentUiState === "waiting") &&
+        currentUiState !== "idle" &&
+        currentUiState !== "full" &&
         !engine.isSoloMode() &&
         !isAway &&
         !document.pictureInPictureElement
       ) {
         awayVideoId = videoId;
-        awayTime = typeof currentTime === "number" ? currentTime : null;
+        awayTime = resolveReliableAwayTime(videoId, currentTime);
         awayStartedAt = Date.now();
         isAway = true;
         engine.setAwayMode(true);
-        saveTabSession({ code: currentCode, awayTime, awayVideoId, awayStartedAt });
         wsClient.setBackgroundSuspended(true);
-        wsClient.send({ type: "AWAY" });
+        saveTabSession({ code: currentCode, awayTime, awayVideoId, awayStartedAt });
       }
     },
   });
@@ -661,18 +910,221 @@
     wsClient.send({ type: "SOLO_EXIT" });
   }
 
+  async function flushPendingResumeAction(via) {
+    if (!pendingResumeAction) return;
+    const action = pendingResumeAction;
+    pendingResumeAction = null;
+    suppressRevivedUntil = Date.now() + 2000;
+
+    if (action.type === "pull_back") {
+      clearAwayState({ persist: true, hideCard: true });
+      suppressInitUntil = Date.now() + 4000;
+      const vid = adapter.getVideoId();
+      if (via === "open" && vid) {
+        wsClient.send({
+          type: "HELLO",
+          videoId: vid,
+          videoTitle: adapter.getVideoTitle(),
+          mode: "resume",
+          keepAway: false,
+        });
+      }
+      overlay.setPill("");
+      await adapter.waitVideoReady(1500);
+      if (!wsClient.isConnected()) return;
+      if (action.videoId && adapter.getVideoId() !== action.videoId) return;
+      engine.setSynced(true);
+      reportBgState({
+        uiState: "synced",
+        activeCount: Math.max(2, currentActiveCount),
+        latencyMs: currentLatencyMs,
+        conflict: null,
+        closePopup: true,
+      });
+      engine.seekAndSyncTo(action.targetTime, { playing: true });
+      overlay.showToast(
+        `已将大家拉回 ${engine.formatTime(action.targetTime)}`,
+        1800,
+        "success"
+      );
+      return;
+    }
+
+    if (action.type === "follow") {
+      clearAwayState({ persist: true, hideCard: true });
+      const vid = adapter.getVideoId();
+      if (via === "open") {
+        wsClient.send({
+          type: "HELLO",
+          videoId: vid,
+          videoTitle: adapter.getVideoTitle(),
+          mode: "resume",
+          keepAway: false,
+        });
+      } else if (vid) {
+        wsClient.send({
+          type: "SYNC_PULL",
+          videoId: vid,
+          videoTitle: adapter.getVideoTitle(),
+          keepAway: false,
+        });
+      }
+      overlay.showToast("正在跟进对方最新进度", 1600, "info");
+    }
+  }
+
+  function openOrUpdateResumeCard({
+    savedAwayVid,
+    savedAwayTime,
+    peerNow,
+    peerPlaying,
+    peerRate,
+    count,
+  }) {
+    resumeCardOpen = true;
+    resumeCardAwayTime = savedAwayTime;
+    resumeCardVideoId = savedAwayVid;
+    engine.setDecisionLocked(true);
+    engine.setAwayMode(true);
+    engine.setSynced(true);
+    engine.forcePauseLocal();
+    overlay.setPill("");
+    reportBgState({
+      uiState: "synced",
+      activeCount: count,
+      latencyMs: currentLatencyMs,
+      conflict: null,
+      closePopup: true,
+    });
+    overlay.showResumeCard({
+      awayTimeSec: savedAwayTime,
+      peerTimeSec: peerNow,
+      peerPlaying: Boolean(peerPlaying),
+      peerRate: Number(peerRate) || 1,
+      formatTime: engine.formatTime,
+      onFollowCurrent() {
+        const vid = adapter.getVideoId();
+        if (returnLinkConfirmed && wsClient.isConnected()) {
+          clearAwayState({ persist: true, hideCard: true });
+          if (vid) {
+            wsClient.send({
+              type: "SYNC_PULL",
+              videoId: vid,
+              videoTitle: adapter.getVideoTitle(),
+              keepAway: false,
+            });
+          }
+          overlay.showToast("正在跟进对方最新进度", 1600, "info");
+          return;
+        }
+        pendingResumeAction = {
+          type: "follow",
+          videoId: vid || savedAwayVid,
+        };
+        pendingReturnChoice = false;
+        resumeCardOpen = false;
+        overlay.hideResumeCard();
+        overlay.showToast("正在重连并跟进对方最新进度…", 2000, "info");
+        wsClient.probeOrReconnect({
+          forceReconnect: false,
+          onAlive() {
+            returnLinkConfirmed = true;
+            flushPendingResumeAction("alive");
+          },
+        });
+      },
+      async onPullBack() {
+        const vid = adapter.getVideoId();
+        if (returnLinkConfirmed && wsClient.isConnected()) {
+          clearAwayState({ persist: true, hideCard: true });
+          suppressInitUntil = Date.now() + 2500;
+          await adapter.waitVideoReady(1500);
+          if (!wsClient.isConnected()) return;
+          if (savedAwayVid && adapter.getVideoId() !== savedAwayVid) return;
+          engine.setSynced(true);
+          engine.seekAndSyncTo(savedAwayTime, { playing: true });
+          overlay.showToast(
+            `已将大家拉回 ${engine.formatTime(savedAwayTime)}`,
+            1800,
+            "success"
+          );
+          return;
+        }
+        pendingResumeAction = {
+          type: "pull_back",
+          targetTime: savedAwayTime,
+          videoId: vid || savedAwayVid,
+        };
+        pendingReturnChoice = false;
+        resumeCardOpen = false;
+        overlay.hideResumeCard();
+        overlay.showToast(
+          `正在重连并拉回 ${engine.formatTime(savedAwayTime)}…`,
+          2000,
+          "info"
+        );
+        wsClient.probeOrReconnect({
+          forceReconnect: false,
+          onAlive() {
+            returnLinkConfirmed = true;
+            flushPendingResumeAction("alive");
+          },
+        });
+      },
+    });
+  }
+
   function triggerReturnFromAway() {
     if (!isAway) return;
-    pendingReturnChoice = true;
-    clearTimeout(returnFallbackTimer);
-    clearTimeout(awaySafetyTimer);
+    if (pendingResumeAction) {
+      wsClient.probeOrReconnect({
+        forceReconnect: false,
+        onAlive() {
+          returnLinkConfirmed = true;
+          flushPendingResumeAction("alive");
+        },
+      });
+      return;
+    }
 
-    awaySafetyTimer = setTimeout(() => {
-      if (pendingReturnChoice || (isAway && !engine.isDecisionLocked())) {
-        clearAwayState({ persist: true });
-        wsClient.send({ type: "BACK" });
-      }
-    }, 3500);
+    const fallbackVid = resumeCardVideoId || awayVideoId || adapter.getVideoId();
+    awayVideoId = fallbackVid;
+    awayTime =
+      (resumeCardOpen && typeof resumeCardAwayTime === "number" && resumeCardAwayTime > 0.5
+        ? resumeCardAwayTime
+        : null) ?? resolveReliableAwayTime(fallbackVid, awayTime);
+
+    pendingReturnChoice = true;
+    returnLinkConfirmed = false;
+    clearTimeout(returnFallbackTimer);
+    clearTimeout(alignPillTimer);
+    alignPillTimer = null;
+    scheduleAwaySafetyCheck(10000);
+
+    const estPeer = estimatePeerNow(awayVideoId);
+    if (
+      awayVideoId &&
+      awayVideoId === adapter.getVideoId() &&
+      typeof awayTime === "number" &&
+      awayTime > 0.5 &&
+      estPeer &&
+      estPeer.time - awayTime > 3.0
+    ) {
+      openOrUpdateResumeCard({
+        savedAwayVid: awayVideoId,
+        savedAwayTime: awayTime,
+        peerNow: estPeer.time,
+        peerPlaying: estPeer.playing,
+        peerRate: estPeer.playbackRate || 1,
+        count: Math.max(2, currentActiveCount),
+      });
+    } else if (!resumeCardOpen) {
+      alignPillTimer = setTimeout(() => {
+        if (pendingReturnChoice && !resumeCardOpen) {
+          overlay.setPill("正在对齐进度…", { tone: "amber", spinner: true });
+        }
+      }, 150);
+    }
 
     const pullCurrent = (fallbackOnly = false) => {
       const vid = adapter.getVideoId();
@@ -681,28 +1133,29 @@
           type: "SYNC_PULL",
           videoId: vid,
           videoTitle: adapter.getVideoTitle(),
-          keepAway: true,
+          keepAway: false,
           fallbackOnly,
         });
       }
     };
 
-    const awayElapsed = awayStartedAt > 0 ? Date.now() - awayStartedAt : 0;
-    const forceReconnect =
-      awayElapsed >= (root.CONFIG.DIRECT_RECONNECT_AWAY_MS || 8000);
-
     wsClient.probeOrReconnect({
-      forceReconnect,
+      forceReconnect: false,
       onAlive() {
+        returnLinkConfirmed = true;
+        if (pendingResumeAction) {
+          flushPendingResumeAction("alive");
+          return;
+        }
         pullCurrent(false);
+        clearTimeout(returnFallbackTimer);
+        returnFallbackTimer = setTimeout(() => {
+          if (pendingReturnChoice && wsClient.isConnected()) {
+            pullCurrent(true);
+          }
+        }, 1000);
       },
     });
-
-    returnFallbackTimer = setTimeout(() => {
-      if (pendingReturnChoice) {
-        pullCurrent(true);
-      }
-    }, 1500);
   }
 
   async function startSync(code, { userInitiated = false } = {}) {
@@ -798,8 +1251,15 @@
       stopNavWatch();
       stopNavWatch = null;
     }
-    clearAwayState({ persist: false });
+    pendingResumeAction = null;
+    returnLinkConfirmed = false;
+    suppressInitUntil = 0;
+    suppressRevivedUntil = 0;
+    clearAwayState({ persist: false, hideCard: true });
     clearTabSession();
+    hiddenAt = 0;
+    lastReturnAt = 0;
+    lastPeerState = null;
     startingCode = null;
     currentUiState = "idle";
     currentActiveCount = 1;
@@ -820,19 +1280,70 @@
     }
   }
 
+  function handleForegroundResume({ elapsedMs = 0, fromPageShow = false } = {}) {
+    lastReturnAt = Date.now();
+    wsClient.setBackgroundSuspended(false);
+    if (
+      currentUiState !== "idle" &&
+      currentUiState !== "full" &&
+      !engine.isSoloMode() &&
+      !document.pictureInPictureElement
+    ) {
+      if (isAway) {
+        awayTime = resolveReliableAwayTime(awayVideoId || adapter.getVideoId(), awayTime);
+        engine.setAwayMode(true);
+        triggerReturnFromAway();
+      } else {
+        const vid = adapter.getVideoId();
+        const video = adapter.getVideoElement();
+        if (vid && !engine.isDecisionLocked()) {
+          awayVideoId = vid;
+          awayTime = resolveReliableAwayTime(vid, video ? video.currentTime : null);
+          awayStartedAt = Date.now() - Math.max(elapsedMs, 0);
+          isAway = true;
+          engine.setAwayMode(true);
+          triggerReturnFromAway();
+        } else {
+          wsClient.probeOrReconnect();
+        }
+      }
+    } else if (!isAway && currentUiState !== "idle") {
+      wsClient.probeOrReconnect();
+    }
+  }
+
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
+      hiddenAt = Date.now();
+      const vid = adapter.getVideoId();
+      const video = adapter.getVideoElement();
+      if (vid && video && !engine.isSoloMode() && currentUiState !== "idle") {
+        saveHeardProgress(vid, video.currentTime, {
+          allowZero: false,
+          readyState: video.readyState,
+        });
+        if (
+          video.paused &&
+          currentUiState !== "full" &&
+          !isAway &&
+          !document.pictureInPictureElement
+        ) {
+          awayVideoId = vid;
+          awayTime = resolveReliableAwayTime(vid, video.currentTime);
+          awayStartedAt = Date.now();
+          isAway = true;
+          engine.setAwayMode(true);
+          wsClient.setBackgroundSuspended(true);
+          saveTabSession({ code: currentCode, awayTime, awayVideoId, awayStartedAt });
+        }
+      }
       return;
     }
 
     if (document.visibilityState === "visible") {
-      wsClient.setBackgroundSuspended(false);
-      if (isAway && !document.pictureInPictureElement) {
-        engine.setAwayMode(true);
-        triggerReturnFromAway();
-      } else if (!isAway && currentUiState !== "idle") {
-        wsClient.probeOrReconnect();
-      }
+      const hiddenElapsed = hiddenAt > 0 ? Date.now() - hiddenAt : 0;
+      hiddenAt = 0;
+      handleForegroundResume({ elapsedMs: hiddenElapsed, fromPageShow: false });
     }
   });
 
@@ -845,13 +1356,13 @@
         !isAway
       ) {
         const video = adapter.getVideoElement();
-        awayVideoId = adapter.getVideoId();
-        awayTime = video ? video.currentTime : null;
+        const vid = adapter.getVideoId();
+        awayVideoId = vid;
+        awayTime = resolveReliableAwayTime(vid, video ? video.currentTime : null);
         awayStartedAt = Date.now();
         isAway = true;
         engine.setAwayMode(true);
         saveTabSession({ code: currentCode, awayTime, awayVideoId, awayStartedAt });
-        wsClient.send({ type: "AWAY" });
       }
     },
     true
@@ -877,12 +1388,9 @@
 
   window.addEventListener("pageshow", (e) => {
     if (e.persisted && currentUiState !== "idle") {
-      wsClient.setBackgroundSuspended(false);
-      if (isAway && !document.pictureInPictureElement) {
-        triggerReturnFromAway();
-      } else {
-        wsClient.probeOrReconnect();
-      }
+      const hiddenElapsed = hiddenAt > 0 ? Date.now() - hiddenAt : 2000;
+      hiddenAt = 0;
+      handleForegroundResume({ elapsedMs: hiddenElapsed, fromPageShow: true });
     }
   });
 
@@ -928,15 +1436,30 @@
           .catch(() => {});
       }
 
+      const currentVid = adapter.getVideoId();
       if (
         tabSess?.awayVideoId &&
-        tabSess.awayVideoId === adapter.getVideoId() &&
-        typeof tabSess.awayTime === "number"
+        tabSess.awayVideoId === currentVid &&
+        typeof tabSess.awayTime === "number" &&
+        tabSess.awayTime > 0.5
       ) {
         isAway = true;
         awayTime = tabSess.awayTime;
         awayVideoId = tabSess.awayVideoId;
         awayStartedAt = tabSess.awayStartedAt || Date.now();
+        pendingReturnChoice = true;
+        engine.setAwayMode(true);
+      } else if (
+        tabSess?.lastHeardVideoId &&
+        tabSess.lastHeardVideoId === currentVid &&
+        typeof tabSess.lastHeardTime === "number" &&
+        tabSess.lastHeardTime > 0.5 &&
+        Date.now() - (tabSess.lastHeardAt || 0) >= 3000
+      ) {
+        isAway = true;
+        awayTime = tabSess.lastHeardTime;
+        awayVideoId = tabSess.lastHeardVideoId;
+        awayStartedAt = tabSess.lastHeardAt || Date.now();
         pendingReturnChoice = true;
         engine.setAwayMode(true);
       }
