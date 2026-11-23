@@ -1,0 +1,316 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  width: 276px;
+  min-width: 264px;
+  max-width: 288px;
+  background: #111114;
+  color: #f4f4f5;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+.card {
+  width: 100%;
+  padding: 14px;
+  background: #111114;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.status-bar {
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #e4e4e7;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-badge.is-idle { color: #a1a1aa; }
+.status-badge.is-waiting { color: #fbbf24; }
+.status-badge.is-synced { color: #4ade80; }
+.status-badge.is-solo { color: #f4f4f5; }
+.status-badge.is-conflict { color: #fcd34d; }
+.status-badge.is-reconnecting { color: #fb923c; }
+.status-badge.is-full { color: #f87171; }
+.status-badge.is-other_tab { color: #93c5fd; }
+
+.latency-badge {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+}
+
+.latency-badge.is-hidden {
+  display: none;
+}
+
+.latency-badge.lat-good {
+  background: rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.34);
+  color: #4ade80;
+}
+
+.latency-badge.lat-mid {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.34);
+  color: #fbbf24;
+}
+
+.latency-badge.lat-high {
+  background: rgba(249, 115, 22, 0.16);
+  border-color: rgba(249, 115, 22, 0.38);
+  color: #fb923c;
+}
+
+.key-well {
+  height: 40px;
+  padding: 0 8px 0 11px;
+  border-radius: 11px;
+  background: #1b1b20;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.key-well:focus-within {
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.key-well.is-locked {
+  background: #16161a;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.icon-slot {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.58);
+  flex-shrink: 0;
+}
+
+.key-well.is-locked .icon-slot {
+  color: rgba(255, 255, 255, 0.48);
+}
+
+#codeInput {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #f4f4f5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.key-well.is-locked #codeInput {
+  color: rgba(255, 255, 255, 0.85);
+  cursor: default;
+}
+
+.icon-btn {
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.72);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.icon-btn:hover {
+  background: rgba(255, 255, 255, 0.11);
+  color: #ffffff;
+}
+
+.icon-btn.is-hidden {
+  display: none;
+}
+
+.action-area {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: filter 0.15s ease, background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+  color: #ffffff;
+  background: transparent;
+}
+
+.btn:hover {
+  filter: brightness(1.1);
+}
+
+.btn:active {
+  transform: scale(0.985);
+}
+
+.btn-compact {
+  min-width: 74px;
+}
+
+.btn-primary {
+  background: #ff0033;
+  letter-spacing: 0.02em;
+}
+
+.btn-glass {
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: #f4f4f5;
+}
+
+.btn-waiting {
+  font-weight: 500;
+  background: rgba(245, 158, 11, 0.13);
+  border-color: rgba(245, 158, 11, 0.34);
+  color: #fbbf24;
+}
+
+.btn-reconnecting {
+  font-weight: 500;
+  background: rgba(249, 115, 22, 0.14);
+  border-color: rgba(249, 115, 22, 0.36);
+  color: #fb923c;
+}
+
+.btn-full {
+  font-weight: 500;
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.42);
+  color: #f87171;
+}
+
+.btn-danger-soft {
+  font-weight: 500;
+  background: rgba(239, 68, 68, 0.13);
+  border-color: rgba(239, 68, 68, 0.32);
+  color: #fca5a5;
+}
+
+.split-row {
+  display: grid;
+  gap: 8px;
+}
+
+.split-action {
+  grid-template-columns: 1fr auto;
+}
+
+.split-even {
+  grid-template-columns: 1fr 1fr;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot-pulse {
+  animation: pulseDot 1.7s ease-in-out infinite;
+}
+
+.dot-gray { background: #71717a; }
+.dot-amber { background: #fbbf24; }
+.dot-green { background: #34d399; }
+.dot-orange { background: #fb923c; }
+.dot-red { background: #f87171; }
+.dot-blue { background: #60a5fa; }
+
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.42; transform: scale(0.8); }
+}
+
+.marquee-wrap {
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: center;
+  color: rgba(252, 211, 77, 0.94);
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.22);
+}
+
+.marquee-track {
+  display: inline-block;
+  min-width: 100%;
+}
+
+.marquee-track.is-scrolling {
+  padding-left: 14px;
+  animation: marqueeScroll 9s linear infinite;
+}
+
+@keyframes marqueeScroll {
+  0%, 12% { transform: translateX(0); }
+  88%, 100% { transform: translateX(calc(-100% + 228px)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot-pulse,
+  .marquee-track.is-scrolling {
+    animation: none !important;
+  }
+}

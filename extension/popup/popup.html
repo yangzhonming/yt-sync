@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YouTube 同步看</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div id="card" class="card">
+    <div id="statusBar" class="status-bar">
+      <span id="statusBadge" class="status-badge"></span>
+      <span id="latencyBadge" class="latency-badge is-hidden"></span>
+    </div>
+
+    <div id="keyWell" class="key-well">
+      <span id="keyIcon" class="icon-slot" aria-hidden="true"></span>
+      <input id="codeInput" type="text" maxlength="16" spellcheck="false" autocomplete="off" value="YT-8899" />
+      <button id="randBtn" class="icon-btn" title="随机生成配对码" type="button"></button>
+      <button id="copyBtn" class="icon-btn" title="复制配对码" type="button"></button>
+    </div>
+
+    <div id="actionArea" class="action-area"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube 同步看",
+  "version": "1.0.0",
+  "description": "双人异地同步看 YouTube & 哔哩哔哩：原画质无损直连，两端对等同步播放、暂停、进度、倍速与切集。",
+  "permissions": ["tabs", "storage", "scripting"],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://m.youtube.com/*",
+    "https://www.bilibili.com/*",
+    "https://m.bilibili.com/*",
+    "https://search.bilibili.com/*",
+    "https://yt-sync.your-subdomain.workers.dev/*"
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*",
+        "https://www.bilibili.com/*",
+        "https://m.bilibili.com/*",
+        "https://search.bilibili.com/*"
+      ],
+      "js": [
+        "content/config.js",
+        "content/ui/overlay.js",
+        "content/adapters/youtube.js",
+        "content/adapters/bilibili.js",
+        "content/transport/ws-client.js",
+        "content/sync/engine.js",
+        "content/main.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+name = "yt-sync"
+main = "src/index.js"
+compatibility_date = "2025-10-01"
+
+[[durable_objects.bindings]]
+name = "SYNC_ROOM"
+class_name = "SyncRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SyncRoom"]
