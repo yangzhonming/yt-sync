@@ -11,6 +11,7 @@
     let reconnectTimer = null;
     let heartbeatTimer = null;
     let probeTimer = null;
+    let connectTimer = null;
     let pendingProbeCb = null;
     let reconnectAttempt = 0;
     let smoothedDelaySec = 0;
@@ -21,9 +22,11 @@
       clearInterval(heartbeatTimer);
       clearTimeout(reconnectTimer);
       clearTimeout(probeTimer);
+      clearTimeout(connectTimer);
       heartbeatTimer = null;
       reconnectTimer = null;
       probeTimer = null;
+      connectTimer = null;
       pendingProbeCb = null;
     }
 
@@ -47,6 +50,7 @@
 
     function connect(code, clientId) {
       intentionalClose = false;
+      backgroundSuspended = false;
       connectStartedAt = Date.now();
       roomCode = code;
       if (clientId) currentClientId = clientId;
@@ -66,8 +70,32 @@
       const socket = new WebSocket(url);
       ws = socket;
 
+      connectTimer = setTimeout(() => {
+        if (ws !== socket || socket.readyState !== WebSocket.CONNECTING) return;
+        connectTimer = null;
+        clearTimers();
+        ws = null;
+        try {
+          socket.close();
+        } catch {
+          // Ignore close errors.
+        }
+        if (!intentionalClose && !backgroundSuspended && roomCode) {
+          const backoff = Math.min(8000, 1000 * Math.pow(2, reconnectAttempt));
+          reconnectAttempt++;
+          handlers.onReconnecting?.();
+          reconnectTimer = setTimeout(() => {
+            if (!intentionalClose && !backgroundSuspended && roomCode) {
+              connect(roomCode, currentClientId);
+            }
+          }, backoff);
+        }
+      }, CONFIG.CONNECT_TIMEOUT_MS || 8000);
+
       socket.addEventListener("open", () => {
         if (ws !== socket) return;
+        clearTimeout(connectTimer);
+        connectTimer = null;
         reconnectAttempt = 0;
         lastAckAt = Date.now();
         handlers.onOpen?.();

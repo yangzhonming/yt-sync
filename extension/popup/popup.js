@@ -167,7 +167,8 @@ function render() {
   }
 
   if (st === "full") {
-    area.innerHTML = `<button id="mainBtn" class="btn btn-full" type="button">换码重试</button>`;
+    const retryLabel = (currentSession.errorText || "").includes("上限") ? "换码重试" : "重试";
+    area.innerHTML = `<button id="mainBtn" class="btn btn-full" type="button">${retryLabel}</button>`;
     $("mainBtn").onclick = handleConnect;
     return;
   }
@@ -202,12 +203,20 @@ async function handleConnect() {
   $("codeInput").value = code;
   currentSession.code = code;
   currentSession.uiState = "waiting";
+  currentSession.errorText = "";
   render();
 
-  const res = await chrome.runtime.sendMessage({ type: "BG_CONNECT", code });
-  if (res && !res.ok && res.full) {
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({ type: "BG_CONNECT", code });
+  } catch {
+    res = { ok: false, error: "扩展后台无响应，请重试" };
+  }
+  if (!res || !res.ok) {
     currentSession.uiState = "full";
-    currentSession.errorText = "连接已达上限";
+    currentSession.errorText = res?.full
+      ? "连接已达上限"
+      : res?.error || "连接失败，请刷新视频页重试";
     render();
   }
 }

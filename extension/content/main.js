@@ -12,6 +12,7 @@
     : root.createYouTubeAdapter();
 
   let currentCode = root.CONFIG.DEFAULT_CODE;
+  let startingCode = null;
   let currentUiState = "idle";
   let currentLatencyMs = null;
   let currentActiveCount = 1;
@@ -108,7 +109,8 @@
     const vid = adapter.getVideoId();
     if (!vid) return;
     engine.forcePauseLocal();
-    await adapter.waitVideoReady();
+    await adapter.waitVideoReady(1500);
+    if (!wsClient.isConnected()) return;
     wsClient.send({
       type: "SYNC_PULL",
       videoId: vid,
@@ -167,6 +169,15 @@
           latencyMs: currentLatencyMs,
         });
       }
+    } else if (msg.status === "back" && currentUiState === "waiting" && currentActiveCount >= 2) {
+      waitingSinceAt = Date.now();
+      wsClient.send({
+        type: "HELLO",
+        videoId: adapter.getVideoId(),
+        videoTitle: adapter.getVideoTitle(),
+        mode: pendingReturnChoice ? "resume" : "initial",
+        keepAway: Boolean(pendingReturnChoice || isAway),
+      });
     }
   }
 
@@ -250,7 +261,7 @@
       }
 
       if (
-        currentUiState === "waiting" &&
+        (currentUiState === "waiting" || currentUiState === "idle") &&
         nextCount >= 2 &&
         waitingSinceAt > 0 &&
         Date.now() - waitingSinceAt > 3000
@@ -378,7 +389,7 @@
           if (count >= 2) {
             overlay.setPill("");
           }
-          if (count >= 2 && currentUiState === "waiting") {
+          if (count >= 2 && ["waiting", "reconnecting", "idle"].includes(currentUiState)) {
             engine.setSynced(true);
             overlay.hideDisconnectCard();
             reportBgState({
@@ -510,7 +521,6 @@
             wsClient.send({ type: "BACK" });
           }
 
-          await adapter.waitVideoReady();
           overlay.setPill("");
           engine.resetVersion();
           engine.setSynced(true);
@@ -521,6 +531,9 @@
             conflict: null,
             closePopup: true,
           });
+          await adapter.waitVideoReady(1500);
+          if (!wsClient.isConnected()) break;
+          if (msg.videoId && adapter.getVideoId() !== msg.videoId) break;
           engine.applyInitialState(msg);
           overlay.showToast("已对齐进度，开始同步", 1800, "success");
           break;
@@ -692,14 +705,35 @@
     }, 1500);
   }
 
-  async function startSync(code) {
+  async function startSync(code, { userInitiated = false } = {}) {
     const nextCode = code || root.CONFIG.DEFAULT_CODE;
+    if (root.CONFIG.SERVER_WS.includes("your-subdomain")) {
+      reportBgState({
+        uiState: "full",
+        conflict: null,
+        errorText: "未配置后端域名，请使用个人包",
+      });
+      overlay.showToast("未配置后端域名，请使用个人扩展包", 3000, "danger");
+      return;
+    }
+    if ((wsClient.isConnectingOrConnected() || startingCode === nextCode) && currentCode === nextCode) {
+      return;
+    }
+    if (userInitiated) {
+      clearAwayState({ persist: false });
+    }
+    startingCode = nextCode;
+    currentCode = nextCode;
+    currentUiState = "waiting";
+    waitingSinceAt = Date.now();
+    saveTabSession({ code: currentCode });
+    const clientId = await getOrCreateClientId();
+    if (startingCode !== nextCode) return;
+    startingCode = null;
     if (wsClient.isConnectingOrConnected() && currentCode === nextCode) {
       return;
     }
-    currentCode = nextCode;
-    saveTabSession({ code: currentCode });
-    const clientId = await getOrCreateClientId();
+    wsClient.setBackgroundSuspended(false);
     engine.start();
     wsClient.connect(currentCode, clientId);
 
@@ -766,6 +800,8 @@
     }
     clearAwayState({ persist: false });
     clearTabSession();
+    startingCode = null;
+    currentUiState = "idle";
     currentActiveCount = 1;
     waitingSinceAt = 0;
     engine.setSoloMode(false);
@@ -852,7 +888,7 @@
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg?.type === "CS_CONNECT") {
-      startSync(msg.code);
+      startSync(msg.code, { userInitiated: msg.source !== "auto" });
       sendResponse({ ok: true });
       return false;
     }

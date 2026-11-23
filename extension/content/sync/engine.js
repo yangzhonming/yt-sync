@@ -31,6 +31,14 @@
     let adTimer = null;
     let seekDebounceTimer = null;
     let initVerifyTimer = null;
+    let pendingMetaCleanup = null;
+
+    function clearPendingMeta() {
+      if (pendingMetaCleanup) {
+        pendingMetaCleanup();
+        pendingMetaCleanup = null;
+      }
+    }
 
     // Consume-to-release Echo Guard locks with 400ms TTL safety fallback.
     const locks = { play: 0, pause: 0, seek: 0, rate: 0 };
@@ -171,8 +179,40 @@
 
     function applyInitialState(msg) {
       clearTimeout(initVerifyTimer);
-      initGuardUntil = Date.now() + 1500;
+      clearPendingMeta();
+      const receivedAt = Date.now();
+      initGuardUntil = receivedAt + 1500;
       applyRemoteState(msg, { forceSeek: true, showToast: false });
+
+      const initialVideo = adapter.getVideoElement();
+      if (initialVideo && initialVideo.readyState < 1) {
+        const rate = Number(msg.playbackRate) || 1;
+        const playing = Boolean(msg.playing);
+        const delay = Number(msg.totalDelay) || 0;
+        let metaTimer = null;
+        const onMeta = () => {
+          clearPendingMeta();
+          if (!active || !synced || inAd || soloMode || awayMode || decisionLocked) return;
+          const localVid = adapter.getVideoId();
+          if (msg.videoId && localVid && msg.videoId !== localVid) return;
+          const elapsedSec = Math.max(0, (Date.now() - receivedAt) / 1000);
+          const expectedTime = Math.max(
+            0,
+            (Number(msg.currentTime) || 0) + (playing ? (delay + elapsedSec) * rate : 0)
+          );
+          initGuardUntil = Date.now() + 1500;
+          applyRemoteState(
+            { ...msg, currentTime: expectedTime, totalDelay: 0 },
+            { forceSeek: true, showToast: false }
+          );
+        };
+        initialVideo.addEventListener("loadedmetadata", onMeta);
+        metaTimer = setTimeout(clearPendingMeta, 10000);
+        pendingMetaCleanup = () => {
+          clearTimeout(metaTimer);
+          initialVideo.removeEventListener("loadedmetadata", onMeta);
+        };
+      }
 
       initVerifyTimer = setTimeout(() => {
         if (!active || !synced || inAd) return;
@@ -456,6 +496,7 @@
       window.removeEventListener("keydown", onKeyDown, true);
       clearTimeout(seekDebounceTimer);
       clearTimeout(initVerifyTimer);
+      clearPendingMeta();
       clearInterval(videoPollTimer);
       clearInterval(adTimer);
       videoPollTimer = null;

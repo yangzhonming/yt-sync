@@ -31,6 +31,10 @@ async function getOrCreateClientId() {
   return fresh;
 }
 
+function isUnconfiguredServer() {
+  return SERVER_HTTP.includes("your-subdomain");
+}
+
 function isSupportedSiteUrl(url) {
   return /^https:\/\/((www|m)\.(youtube|bilibili)|search\.bilibili)\.com\//i.test(url || "");
 }
@@ -108,9 +112,24 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   }
 });
 
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete") return;
+  const url = tab?.url || changeInfo.url || "";
+  if (!isSupportedSiteUrl(url)) return;
+  const session = await getSession();
+  if (session.activeTabId === tabId && session.uiState === "waiting") {
+    sendToTabWithFallback(tabId, {
+      type: "CS_CONNECT",
+      code: session.code,
+      source: "auto",
+    }).catch(() => {});
+  }
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
-    switch (message?.type) {
+    try {
+      switch (message?.type) {
       case "BG_GET_STATE": {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         const session = await getSession();
@@ -140,21 +159,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const code = normalizeCode(message.code);
         await chrome.storage.local.set({ pairingCode: code });
 
+        if (isUnconfiguredServer()) {
+          await setSession({
+            activeTabId: null,
+            code,
+            uiState: "full",
+            conflict: null,
+            errorText: "未配置后端域名，请使用个人包",
+          });
+          sendResponse({ ok: false, error: "未配置后端域名，请使用个人包" });
+          return;
+        }
+
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab?.id) {
           sendResponse({ ok: false, error: "未找到当前标签页" });
           return;
         }
 
-        const session = await getSession();
+        let session = await getSession();
         if (
           session.activeTabId !== null &&
           session.activeTabId !== tab.id &&
           session.uiState !== "idle" &&
           session.uiState !== "full"
         ) {
-          sendResponse({ ok: false, error: "已在其他标签页同步中" });
-          return;
+          try {
+            await chrome.tabs.get(session.activeTabId);
+            sendResponse({ ok: false, error: "已在其他标签页同步中" });
+            return;
+          } catch {
+            session = await clearSession(code);
+          }
         }
 
         if (isSupportedSiteUrl(tab.url)) {
@@ -167,7 +203,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             conflict: null,
             errorText: "",
           });
-          await sendToTabWithFallback(tab.id, { type: "CS_CONNECT", code });
+          try {
+            await sendToTabWithFallback(tab.id, { type: "CS_CONNECT", code, source: "user" });
+          } catch {
+            await clearSession(code);
+            sendResponse({ ok: false, error: "无法连接当前页，请刷新视频页后重试" });
+            return;
+          }
           sendResponse({ ok: true, mode: "current_tab" });
           return;
         }
@@ -216,6 +258,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           conflict: null,
           errorText: "",
         });
+        chrome.tabs
+          .sendMessage(newTab.id, { type: "CS_CONNECT", code, source: "auto" })
+          .catch(() => {});
         sendResponse({ ok: true, mode: "new_tab", tabId: newTab.id });
         return;
       }
@@ -348,6 +393,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       default:
         sendResponse({ ok: false });
+      }
+    } catch (err) {
+      sendResponse({ ok: false, error: err?.message || "后台通信异常，请重试" });
     }
   })();
 
