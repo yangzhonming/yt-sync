@@ -37,6 +37,8 @@
   let returnFallbackTimer = null;
   let awaySafetyTimer = null;
   let alignPillTimer = null;
+  let recentClosePillTimer = null;
+  let returnFallbackSent = false;
   let lastAlignToastAt = 0;
   let stopNavWatch = null;
   let wsClient = null;
@@ -54,6 +56,7 @@
     resumeCardOpen = false;
     resumeCardAwayTime = null;
     resumeCardVideoId = null;
+    returnFallbackSent = false;
     returnCheckStartedAt = 0;
     pendingReturnChoice = false;
     engine?.setAwayMode(false);
@@ -213,7 +216,13 @@
     }
     if (patch.latencyMs !== undefined) currentLatencyMs = patch.latencyMs;
     if (patch.activeCount !== undefined) currentActiveCount = patch.activeCount;
-    chrome.runtime.sendMessage({ type: "BG_UPDATE_STATE", ...patch }).catch(() => {});
+    chrome.runtime
+      .sendMessage({
+        type: "BG_UPDATE_STATE",
+        videoId: patch.videoId !== undefined ? patch.videoId : adapter.getVideoId(),
+        ...patch,
+      })
+      .catch(() => {});
   }
 
   async function notifyReadyForCurrentVideo() {
@@ -319,6 +328,7 @@
     onOpen() {
       overlay.setPill("");
       returnLinkConfirmed = true;
+      returnFallbackSent = false;
       if (pendingResumeAction) {
         flushPendingResumeAction("open");
         return;
@@ -330,6 +340,7 @@
           if (pendingReturnChoice && wsClient.isConnected()) {
             const vid = adapter.getVideoId();
             if (vid) {
+              returnFallbackSent = true;
               wsClient.send({
                 type: "SYNC_PULL",
                 videoId: vid,
@@ -339,7 +350,7 @@
               });
             }
           }
-        }, 1000);
+        }, 600);
       }
       wsClient.send({
         type: "HELLO",
@@ -467,6 +478,28 @@
       switch (msg.type) {
         case "WAITING": {
           if (
+            pendingReturnChoice &&
+            returnFallbackSent &&
+            !resumeCardOpen &&
+            !pendingResumeAction &&
+            typeof msg.activeCount === "number" &&
+            msg.activeCount >= 2
+          ) {
+            returnFallbackSent = false;
+            engine.armInitGuard(1500);
+            clearAwayState({ persist: true, hideCard: true });
+            overlay.setPill("");
+            engine.setSynced(true);
+            reportBgState({
+              uiState: "synced",
+              activeCount: msg.activeCount,
+              latencyMs: currentLatencyMs,
+              conflict: null,
+              closePopup: true,
+            });
+            break;
+          }
+          if (
             (pendingReturnChoice || resumeCardOpen || pendingResumeAction) &&
             typeof msg.activeCount === "number" &&
             msg.activeCount >= 2
@@ -530,7 +563,11 @@
         }
 
         case "ASK_STATE": {
-          if (isAway || resumeCardOpen || pendingResumeAction) {
+          if (
+            (isAway && document.visibilityState === "hidden") ||
+            resumeCardOpen ||
+            pendingResumeAction
+          ) {
             break;
           }
           const snap = engine.readSnapshot();
@@ -692,6 +729,9 @@
                 conflict: null,
                 closePopup: true,
               });
+              if (Boolean(msg.playing)) {
+                engine.handleDriftCheck(msg, { seekThresholdSec: 1.0 });
+              }
               break;
             }
           }
@@ -797,12 +837,18 @@
   function shieldLaggingAction(
     videoId,
     currentTime,
-    { hadUserGesture = false, checkRecentReturn = false } = {}
+    { hadUserGesture = false, checkRecentReturn = false, isSeek = false } = {}
   ) {
     if (!videoId || typeof currentTime !== "number" || !Number.isFinite(currentTime)) {
       return true;
     }
     const peer = estimatePeerNow(videoId);
+    if (isSeek && document.visibilityState === "hidden") {
+      const video = adapter.getVideoElement();
+      if (video && !video.paused && !isAway && wsClient.isConnected()) {
+        return true;
+      }
+    }
     const isLagging = Boolean(peer && peer.time - currentTime > 3.0);
     const recentlyReturned =
       checkRecentReturn && lastReturnAt > 0 && Date.now() - lastReturnAt < 15000;
@@ -844,12 +890,14 @@
       return shieldLaggingAction(videoId, currentTime, {
         hadUserGesture,
         checkRecentReturn: true,
+        isSeek: false,
       });
     },
     beforeEmitSeek({ videoId, currentTime, hadUserGesture }) {
       return shieldLaggingAction(videoId, currentTime, {
         hadUserGesture,
         checkRecentReturn: false,
+        isSeek: true,
       });
     },
     onBlockedAction() {
@@ -1096,6 +1144,7 @@
 
     pendingReturnChoice = true;
     returnLinkConfirmed = false;
+    returnFallbackSent = false;
     clearTimeout(returnFallbackTimer);
     clearTimeout(alignPillTimer);
     alignPillTimer = null;
@@ -1151,14 +1200,20 @@
         clearTimeout(returnFallbackTimer);
         returnFallbackTimer = setTimeout(() => {
           if (pendingReturnChoice && wsClient.isConnected()) {
+            returnFallbackSent = true;
             pullCurrent(true);
           }
-        }, 1000);
+        }, 600);
       },
     });
   }
 
   async function startSync(code, { userInitiated = false } = {}) {
+    clearTimeout(recentClosePillTimer);
+    recentClosePillTimer = null;
+    if (currentUiState === "idle") {
+      overlay.setPill("");
+    }
     const nextCode = code || root.CONFIG.DEFAULT_CODE;
     if (root.CONFIG.SERVER_WS.includes("your-subdomain")) {
       reportBgState({
@@ -1251,6 +1306,8 @@
       stopNavWatch();
       stopNavWatch = null;
     }
+    clearTimeout(recentClosePillTimer);
+    recentClosePillTimer = null;
     pendingResumeAction = null;
     returnLinkConfirmed = false;
     suppressInitUntil = 0;
@@ -1428,7 +1485,45 @@
     .then(async (res) => {
       const tabSess = readTabSessionRaw();
       const targetCode = res?.shouldSync && res.code ? res.code : tabSess?.code;
-      if (!targetCode) return;
+      if (!targetCode) {
+        const reopenVid = adapter.getVideoId();
+        if (reopenVid && currentUiState === "idle" && !startingCode) {
+          const recent = await chrome.runtime
+            .sendMessage({ type: "BG_CHECK_RECENT_CLOSE", videoId: reopenVid })
+            .catch(() => null);
+          if (
+            recent?.canReconnect &&
+            recent.code &&
+            currentUiState === "idle" &&
+            !startingCode &&
+            !wsClient.isConnectingOrConnected()
+          ) {
+            overlay.setActionPill({
+              text: "检测到刚断开的同步房间",
+              actionLabel: "一键重连",
+              async onAction() {
+                clearTimeout(recentClosePillTimer);
+                recentClosePillTimer = null;
+                await chrome.runtime
+                  .sendMessage({ type: "BG_RECLAIM_TAB", code: recent.code })
+                  .catch(() => {});
+                await chrome.runtime
+                  .sendMessage({ type: "BG_CLEAR_RECENT_CLOSE" })
+                  .catch(() => {});
+                startSync(recent.code, { userInitiated: true });
+              },
+            });
+            clearTimeout(recentClosePillTimer);
+            recentClosePillTimer = setTimeout(() => {
+              recentClosePillTimer = null;
+              if (currentUiState === "idle") {
+                overlay.setPill("");
+              }
+            }, 15000);
+          }
+        }
+        return;
+      }
 
       if (!res?.shouldSync) {
         await chrome.runtime

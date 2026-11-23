@@ -2,6 +2,8 @@ const SERVER_HTTP = "https://yt-sync.your-subdomain.workers.dev";
 const DEFAULT_CODE = "YT-8899";
 const SESSION_KEY = "ytSyncSession";
 const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
+const LAST_CLOSED_KEY = "ytSyncLastClosed";
+const LAST_CLOSED_TTL_MS = 60 * 1000;
 
 const CONTENT_FILES = [
   "content/config.js",
@@ -55,6 +57,7 @@ function defaultSession(code = DEFAULT_CODE) {
     uiState: "idle",
     latencyMs: null,
     activeCount: 1,
+    lastVideoId: null,
     conflict: null,
     errorText: "",
     updatedAt: 0,
@@ -108,6 +111,20 @@ chrome.runtime.onStartup.addListener(async () => {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const session = await getSession();
   if (session.activeTabId === tabId) {
+    if (
+      session.uiState !== "idle" &&
+      session.uiState !== "full" &&
+      session.code &&
+      session.lastVideoId
+    ) {
+      await sessionStore.set({
+        [LAST_CLOSED_KEY]: {
+          code: session.code,
+          videoId: session.lastVideoId,
+          closedAt: Date.now(),
+        },
+      });
+    }
     await clearSession(session.code);
   }
 });
@@ -158,6 +175,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "BG_CONNECT": {
         const code = normalizeCode(message.code);
         await chrome.storage.local.set({ pairingCode: code });
+        await sessionStore.remove(LAST_CLOSED_KEY);
 
         if (isUnconfiguredServer()) {
           await setSession({
@@ -266,6 +284,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       case "BG_DISCONNECT": {
+        await sessionStore.remove(LAST_CLOSED_KEY);
         const session = await getSession();
         if (session.activeTabId !== null) {
           try {
@@ -380,6 +399,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             uiState: nextUiState,
             latencyMs: message.latencyMs !== undefined ? message.latencyMs : session.latencyMs,
             activeCount: message.activeCount !== undefined ? message.activeCount : session.activeCount,
+            lastVideoId: message.videoId !== undefined ? message.videoId : session.lastVideoId,
             conflict: message.conflict !== undefined ? message.conflict : session.conflict,
             errorText: message.errorText !== undefined ? message.errorText : session.errorText,
           });
@@ -387,6 +407,66 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.closePopup) {
           chrome.runtime.sendMessage({ type: "POPUP_CLOSE" }).catch(() => {});
         }
+        sendResponse({ ok: true });
+        return;
+      }
+
+      case "BG_CHECK_RECENT_CLOSE": {
+        if (isUnconfiguredServer() || !message.videoId) {
+          sendResponse({ canReconnect: false });
+          return;
+        }
+        const session = await getSession();
+        if (
+          session.activeTabId !== null &&
+          session.uiState !== "idle" &&
+          session.uiState !== "full"
+        ) {
+          sendResponse({ canReconnect: false });
+          return;
+        }
+        const data = await sessionStore.get(LAST_CLOSED_KEY);
+        const closed = data[LAST_CLOSED_KEY];
+        if (
+          !closed ||
+          !closed.code ||
+          closed.videoId !== message.videoId ||
+          !closed.closedAt ||
+          Date.now() - closed.closedAt > LAST_CLOSED_TTL_MS
+        ) {
+          if (closed && (!closed.closedAt || Date.now() - closed.closedAt > LAST_CLOSED_TTL_MS)) {
+            await sessionStore.remove(LAST_CLOSED_KEY);
+          }
+          sendResponse({ canReconnect: false });
+          return;
+        }
+        try {
+          const clientId = await getOrCreateClientId();
+          const resp = await fetch(
+            `${SERVER_HTTP}/room/${encodeURIComponent(closed.code)}/peek?clientId=${encodeURIComponent(clientId)}`
+          );
+          if (!resp.ok) {
+            sendResponse({ canReconnect: false });
+            return;
+          }
+          const peek = await resp.json();
+          if (!peek.full && Number(peek.peerCount) >= 1) {
+            sendResponse({
+              canReconnect: true,
+              code: closed.code,
+              peerCount: Number(peek.peerCount),
+            });
+            return;
+          }
+        } catch {
+          // Network failure: skip reconnect pill.
+        }
+        sendResponse({ canReconnect: false });
+        return;
+      }
+
+      case "BG_CLEAR_RECENT_CLOSE": {
+        await sessionStore.remove(LAST_CLOSED_KEY);
         sendResponse({ ok: true });
         return;
       }

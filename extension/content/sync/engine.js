@@ -66,8 +66,8 @@
     }
 
     // Idempotent state-based play/pause deduplication, target-based seek ledger,
-    // and ratechange lock.
-    const locks = { rate: 0 };
+    // and target-matched ratechange lock.
+    const locks = { rate: 0, rateTarget: null };
     let syncedPlaying = null;
     let remoteToggleGuardUntil = 0;
     let pendingRemoteSeekTarget = null;
@@ -75,16 +75,27 @@
     let pendingRemoteSeekIsAutoRealign = false;
     let lastProgressTickAt = 0;
 
-    function armRateLock() {
+    function armRateLock(targetRate = null) {
       locks.rate = Date.now() + CONFIG.ECHO_TTL_MS;
+      locks.rateTarget = typeof targetRate === "number" ? targetRate : null;
     }
 
-    function consumeRateLock() {
+    function consumeRateLock(actualRate) {
       if (locks.rate > Date.now()) {
+        const target = locks.rateTarget;
         locks.rate = 0;
-        return true;
+        locks.rateTarget = null;
+        if (
+          target === null ||
+          typeof actualRate !== "number" ||
+          Math.abs(actualRate - target) <= 0.02
+        ) {
+          return true;
+        }
+        return false;
       }
       locks.rate = 0;
+      locks.rateTarget = null;
       return false;
     }
 
@@ -205,7 +216,7 @@
       if (Math.abs(video.playbackRate - rate) > 0.01) {
         lastRemoteRateSetAt = Date.now();
         expectedRemoteRate = rate;
-        armRateLock();
+        armRateLock(rate);
         video.playbackRate = rate;
       }
 
@@ -339,7 +350,7 @@
       send({ ...payloadBase, action: playing ? "play" : "pause" });
     }
 
-    function handleDriftCheck(msg) {
+    function handleDriftCheck(msg, { seekThresholdSec = 1.5 } = {}) {
       if (!active || !synced || inAd || soloMode || awayMode || decisionLocked) return;
       const localVid = adapter.getVideoId();
       if (!localVid || msg.videoId !== localVid) return;
@@ -347,7 +358,7 @@
       const video = adapter.getVideoElement();
       if (!video || !msg.playing || video.paused) {
         if (catchupActive && video) {
-          armRateLock();
+          armRateLock(baseRate);
           video.playbackRate = baseRate;
           catchupActive = false;
         }
@@ -360,22 +371,22 @@
       const diff = targetTime - video.currentTime;
       const absDiff = Math.abs(diff);
 
-      if (absDiff < 0.4) {
+      if (absDiff < 0.35) {
         if (catchupActive) {
-          armRateLock();
+          armRateLock(baseRate);
           video.playbackRate = baseRate;
           catchupActive = false;
         }
         return;
       }
 
-      if (absDiff <= 2.0) {
-        const nudge = diff > 0 ? baseRate * 1.05 : baseRate * 0.95;
+      if (absDiff <= seekThresholdSec) {
+        const nudge = diff > 0 ? baseRate * 1.08 : baseRate * 0.92;
         const rounded = Number(nudge.toFixed(3));
         if (Math.abs(video.playbackRate - rounded) > 0.005) {
           lastRemoteRateSetAt = Date.now();
           expectedRemoteRate = rounded;
-          armRateLock();
+          armRateLock(rounded);
           video.playbackRate = rounded;
         }
         catchupActive = true;
@@ -383,7 +394,7 @@
       }
 
       if (catchupActive) {
-        armRateLock();
+        armRateLock(baseRate);
         video.playbackRate = baseRate;
         catchupActive = false;
       }
@@ -392,10 +403,11 @@
     }
 
     function onPlay() {
-      if (awayMode || decisionLocked || soloMode || Date.now() < initGuardUntil) {
+      if (awayMode || decisionLocked || soloMode) {
         notifyBlockedIfAligning();
         return;
       }
+      if (Date.now() < initGuardUntil && !hasRecentUserGesture(1500)) return;
       if (!active || !synced || inAd) return;
       if (syncedPlaying === true) return;
       if (Date.now() < remoteToggleGuardUntil && syncedPlaying === false) return;
@@ -425,10 +437,11 @@
         });
         return;
       }
-      if (awayMode || decisionLocked || soloMode || Date.now() < initGuardUntil) {
+      if (awayMode || decisionLocked || soloMode) {
         notifyBlockedIfAligning();
         return;
       }
+      if (Date.now() < initGuardUntil && !hasRecentUserGesture(1500)) return;
       if (!active || !synced || inAd) return;
       if (syncedPlaying === false) return;
       if (Date.now() < remoteToggleGuardUntil && syncedPlaying === true) return;
@@ -465,10 +478,11 @@
         }
       }
 
-      if (awayMode || decisionLocked || soloMode || Date.now() < initGuardUntil) {
+      if (awayMode || decisionLocked || soloMode) {
         notifyBlockedIfAligning();
         return;
       }
+      if (Date.now() < initGuardUntil && !hasRecentUserGesture(1500)) return;
       if (!active || !synced || inAd) return;
       clearTimeout(seekDebounceTimer);
       seekDebounceTimer = setTimeout(() => {
@@ -479,7 +493,7 @@
           !awayMode &&
           !decisionLocked &&
           !soloMode &&
-          Date.now() >= initGuardUntil
+          (Date.now() >= initGuardUntil || hasRecentUserGesture(1500))
         ) {
           const curVideo = boundVideo || adapter.getVideoElement();
           if (
@@ -525,15 +539,17 @@
     }
 
     function onRateChange() {
-      if (consumeRateLock()) return;
-      if (awayMode || decisionLocked || soloMode || Date.now() < initGuardUntil) return;
-      if (!active || !synced || inAd) return;
       const video = boundVideo || adapter.getVideoElement();
       if (!video) return;
+      if (consumeRateLock(video.playbackRate)) return;
+      if (awayMode || decisionLocked || soloMode) return;
+      if (Date.now() < initGuardUntil && !hasRecentUserGesture(1500)) return;
+      if (!active || !synced || inAd) return;
 
       if (
         lastRemoteRateSetAt > 0 &&
         Date.now() - lastRemoteRateSetAt < 600 &&
+        !hasRecentUserGesture(1500) &&
         Math.abs(video.playbackRate - expectedRemoteRate) > 0.02
       ) {
         if (Date.now() - lastConflictToastAt > 15000) {
@@ -591,7 +607,7 @@
       baseRate = nextRate;
       catchupActive = false;
       lastRemoteRateSetAt = 0;
-      armRateLock();
+      armRateLock(nextRate);
       video.playbackRate = nextRate;
       overlay.showToast(
         `${soloMode ? "先看倍速" : "倍速"} ${nextRate.toFixed(1)}x`,
