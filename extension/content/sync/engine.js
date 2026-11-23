@@ -333,8 +333,9 @@
     }
 
     function onPause() {
-      if (isEventSuppressed("pause")) return;
       if (document.visibilityState === "hidden") {
+        if (consumeLock("pause")) return;
+        if (!active || soloMode || awayMode || decisionLocked || inAd) return;
         const video = boundVideo || adapter.getVideoElement();
         onBackgroundPause?.({
           videoId: adapter.getVideoId(),
@@ -342,6 +343,7 @@
         });
         return;
       }
+      if (isEventSuppressed("pause")) return;
       emitControl("pause");
     }
 

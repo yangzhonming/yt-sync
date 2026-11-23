@@ -21,6 +21,7 @@
   let awayTime = null;
   let awayVideoId = null;
   let awayStartedAt = 0;
+  let hiddenAt = 0;
   let pendingReturnChoice = false;
   let waitingSinceAt = 0;
   let returnFallbackTimer = null;
@@ -47,6 +48,20 @@
         awayStartedAt: 0,
       });
     }
+  }
+
+  function scheduleAwaySafetyCheck(delayMs = 3500) {
+    clearTimeout(awaySafetyTimer);
+    awaySafetyTimer = setTimeout(() => {
+      if (!pendingReturnChoice && !(isAway && !engine.isDecisionLocked())) return;
+      if (!wsClient.isConnected()) {
+        // Still reconnecting: keep shield armed so stale paused timestamp cannot leak.
+        scheduleAwaySafetyCheck(2500);
+        return;
+      }
+      clearAwayState({ persist: true });
+      wsClient.send({ type: "BACK" });
+    }, delayMs);
   }
 
   function readTabSessionRaw() {
@@ -198,6 +213,9 @@
 
     onOpen() {
       overlay.setPill("");
+      if (pendingReturnChoice) {
+        scheduleAwaySafetyCheck(3500);
+      }
       wsClient.send({
         type: "HELLO",
         videoId: adapter.getVideoId(),
@@ -505,7 +523,7 @@
                 async onPullBack() {
                   clearAwayState({ persist: true });
                   wsClient.send({ type: "BACK" });
-                  await adapter.waitVideoReady();
+                  await adapter.waitVideoReady(1500);
                   engine.seekAndSyncTo(savedAwayTime, { playing: true });
                   overlay.showToast(
                     `已将大家拉回 ${engine.formatTime(savedAwayTime)}`,
@@ -519,6 +537,20 @@
 
             clearAwayState({ persist: true });
             wsClient.send({ type: "BACK" });
+            const localVideo = adapter.getVideoElement();
+            const localPlaying = Boolean(localVideo && !localVideo.paused);
+            if (localVideo && localPlaying === Boolean(msg.playing)) {
+              overlay.setPill("");
+              engine.setSynced(true);
+              reportBgState({
+                uiState: "synced",
+                activeCount: count,
+                latencyMs: currentLatencyMs,
+                conflict: null,
+                closePopup: true,
+              });
+              break;
+            }
           }
 
           overlay.setPill("");
@@ -617,7 +649,7 @@
     send: (payload) => wsClient.send(payload),
     onBackgroundPause({ videoId, currentTime }) {
       if (
-        (currentUiState === "synced" || currentUiState === "waiting") &&
+        (currentUiState === "synced" || currentUiState === "reconnecting") &&
         !engine.isSoloMode() &&
         !isAway &&
         !document.pictureInPictureElement
@@ -665,14 +697,7 @@
     if (!isAway) return;
     pendingReturnChoice = true;
     clearTimeout(returnFallbackTimer);
-    clearTimeout(awaySafetyTimer);
-
-    awaySafetyTimer = setTimeout(() => {
-      if (pendingReturnChoice || (isAway && !engine.isDecisionLocked())) {
-        clearAwayState({ persist: true });
-        wsClient.send({ type: "BACK" });
-      }
-    }, 3500);
+    scheduleAwaySafetyCheck(3500);
 
     const pullCurrent = (fallbackOnly = false) => {
       const vid = adapter.getVideoId();
@@ -800,6 +825,7 @@
     }
     clearAwayState({ persist: false });
     clearTabSession();
+    hiddenAt = 0;
     startingCode = null;
     currentUiState = "idle";
     currentActiveCount = 1;
@@ -822,14 +848,38 @@
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
+      hiddenAt = Date.now();
       return;
     }
 
     if (document.visibilityState === "visible") {
+      const hiddenElapsed = hiddenAt > 0 ? Date.now() - hiddenAt : 0;
+      hiddenAt = 0;
       wsClient.setBackgroundSuspended(false);
       if (isAway && !document.pictureInPictureElement) {
         engine.setAwayMode(true);
         triggerReturnFromAway();
+      } else if (
+        !isAway &&
+        !document.pictureInPictureElement &&
+        (currentUiState === "synced" || currentUiState === "reconnecting") &&
+        !engine.isSoloMode() &&
+        !engine.isDecisionLocked() &&
+        hiddenElapsed >= 1500
+      ) {
+        const vid = adapter.getVideoId();
+        const video = adapter.getVideoElement();
+        if (vid && (!wsClient.isConnected() || video?.paused)) {
+          awayVideoId = vid;
+          awayTime = video ? video.currentTime : null;
+          awayStartedAt = Date.now() - hiddenElapsed;
+          isAway = true;
+          engine.setAwayMode(true);
+          saveTabSession({ code: currentCode, awayTime, awayVideoId, awayStartedAt });
+          triggerReturnFromAway();
+        } else {
+          wsClient.probeOrReconnect();
+        }
       } else if (!isAway && currentUiState !== "idle") {
         wsClient.probeOrReconnect();
       }
