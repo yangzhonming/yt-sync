@@ -39,6 +39,7 @@
       ],
       "js": [
         "content/config.js",
+        "content/debug/recorder.js",
         "content/ui/overlay.js",
         "content/adapters/youtube.js",
         "content/adapters/bilibili.js",

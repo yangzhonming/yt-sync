@@ -75,6 +75,7 @@
         connectTimer = null;
         clearTimers();
         ws = null;
+        handlers.onSocketEvent?.({ ev: "connect_timeout" });
         try {
           socket.close();
         } catch {
@@ -98,6 +99,7 @@
         connectTimer = null;
         reconnectAttempt = 0;
         lastAckAt = Date.now();
+        handlers.onSocketEvent?.({ ev: "open" });
         handlers.onOpen?.();
 
         const intervalMs = CONFIG.HEARTBEAT_INTERVAL_MS || CONFIG.PING_INTERVAL_MS || 5000;
@@ -110,6 +112,7 @@
             Date.now() - lastAckAt > (CONFIG.PONG_WATCHDOG_MS || 12000)
           ) {
             // Half-open TCP watchdog: force close so reconnect kicks in.
+            handlers.onSocketEvent?.({ ev: "watchdog_timeout" });
             try {
               socket.close(4000, "WATCHDOG_TIMEOUT");
             } catch {
@@ -161,6 +164,7 @@
         if (ws !== socket) return;
         clearTimers();
         ws = null;
+        handlers.onSocketEvent?.({ ev: "close", code: ev.code, reason: ev.reason });
 
         if (ev.code === 4001 || ev.reason === "ROOM_FULL") {
           intentionalClose = true;

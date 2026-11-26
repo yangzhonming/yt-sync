@@ -18,8 +18,13 @@
     beforeEmitPlay,
     beforeEmitSeek,
     onBlockedAction,
+    onDebugEvent,
   }) {
     const { CONFIG } = root;
+
+    function debug(ev, data = {}) {
+      onDebugEvent?.(ev, data);
+    }
 
     let active = false;
     let synced = false;
@@ -74,6 +79,68 @@
     let pendingRemoteSeekAt = 0;
     let pendingRemoteSeekIsAutoRealign = false;
     let lastProgressTickAt = 0;
+    let videoSwitchAt = 0;
+    let videoSwitchPrevTime = 0;
+    let videoSwitchFreshMediaSeen = true;
+    let lastStableTime = null;
+    let lastStableTimeAt = 0;
+
+    function isStaleVideoMedia(video) {
+      if (videoSwitchFreshMediaSeen) return false;
+      if (!video) return false;
+      if (Date.now() - videoSwitchAt >= 4000) {
+        videoSwitchFreshMediaSeen = true;
+        return false;
+      }
+      if (
+        !video.ended &&
+        (video.currentTime < 3 ||
+          (videoSwitchPrevTime > 8 && video.currentTime < videoSwitchPrevTime - 5))
+      ) {
+        videoSwitchFreshMediaSeen = true;
+        return false;
+      }
+      return true;
+    }
+
+    function onMediaEmptied() {
+      if (videoSwitchAt > 0 && Date.now() - videoSwitchAt < 4000) {
+        videoSwitchFreshMediaSeen = false;
+      }
+    }
+
+    function onMediaLoaded() {
+      videoSwitchFreshMediaSeen = true;
+    }
+
+    function notifyVideoChanged() {
+      const video = boundVideo || adapter.getVideoElement();
+      videoSwitchAt = Date.now();
+      videoSwitchPrevTime =
+        video && typeof video.currentTime === "number" && Number.isFinite(video.currentTime)
+          ? video.currentTime
+          : 0;
+      const hasDuration =
+        video &&
+        typeof video.duration === "number" &&
+        Number.isFinite(video.duration) &&
+        video.duration > 0;
+      const alreadyFresh =
+        !video ||
+        (!video.ended &&
+          video.currentTime < 3 &&
+          (!hasDuration || video.currentTime < video.duration - 1.5));
+      videoSwitchFreshMediaSeen = Boolean(alreadyFresh);
+      syncedPlaying = null;
+      remoteToggleGuardUntil = 0;
+      catchupActive = false;
+      lastStableTime = null;
+      lastStableTimeAt = 0;
+      clearRemoteSeekTarget();
+      clearPendingMeta();
+      clearTimeout(initVerifyTimer);
+      clearTimeout(seekDebounceTimer);
+    }
 
     function armRateLock(targetRate = null) {
       locks.rate = Date.now() + CONFIG.ECHO_TTL_MS;
@@ -124,6 +191,7 @@
         p.catch((err) => {
           if (err?.name === "NotAllowedError") {
             syncedPlaying = false;
+            debug("play_not_allowed", {});
             overlay.showUnlock(() => {
               const v = adapter.getVideoElement();
               if (!v) return;
@@ -154,6 +222,18 @@
 
     function readSnapshot() {
       const video = adapter.getVideoElement();
+      if (
+        isStaleVideoMedia(video) ||
+        (video && videoSwitchAt > 0 && Date.now() - videoSwitchAt < 4000 && video.ended)
+      ) {
+        return {
+          videoId: adapter.getVideoId(),
+          videoTitle: adapter.getVideoTitle(),
+          currentTime: 0,
+          playbackRate: baseRate || 1,
+          playing: false,
+        };
+      }
       if (video && !catchupActive) {
         baseRate = video.playbackRate || 1;
       }
@@ -186,17 +266,52 @@
       msg,
       { forceSeek = false, showToast = false, isInitial = false, isAutoRealign = false } = {}
     ) {
-      if (inAd || soloMode || awayMode || decisionLocked) return;
+      if (inAd || soloMode || awayMode || decisionLocked) {
+        debug("ignored", {
+          action: msg.action || (isInitial ? "init" : "state"),
+          reason: inAd ? "in_ad" : soloMode ? "solo" : awayMode ? "away" : "decision_locked",
+          traceId: msg.traceId,
+          v: msg.version,
+        });
+        return;
+      }
       const localVid = adapter.getVideoId();
-      if (msg.videoId && localVid && msg.videoId !== localVid) return;
+      if (msg.videoId && localVid && msg.videoId !== localVid) {
+        debug("ignored", {
+          action: msg.action || (isInitial ? "init" : "state"),
+          reason: "video_mismatch",
+          videoId: msg.videoId,
+          actual: localVid,
+          traceId: msg.traceId,
+          v: msg.version,
+        });
+        return;
+      }
 
       if (typeof msg.version === "number") {
-        if (msg.version < lastAppliedVersion) return;
+        if (msg.version < lastAppliedVersion) {
+          debug("ignored", {
+            action: msg.action || (isInitial ? "init" : "state"),
+            reason: "version_old",
+            v: msg.version,
+            lastV: lastAppliedVersion,
+            traceId: msg.traceId,
+          });
+          return;
+        }
         lastAppliedVersion = msg.version;
       }
 
       const video = adapter.getVideoElement();
-      if (!video) return;
+      if (!video) {
+        debug("ignored", {
+          action: msg.action || (isInitial ? "init" : "state"),
+          reason: "no_video",
+          traceId: msg.traceId,
+          v: msg.version,
+        });
+        return;
+      }
 
       const rate = Number(msg.playbackRate) || 1;
       const playing = Boolean(msg.playing);
@@ -205,7 +320,17 @@
         0,
         (Number(msg.currentTime) || 0) + (playing ? delay * rate : 0)
       );
+      let clampedTarget = targetTime;
+      if (
+        typeof video.duration === "number" &&
+        Number.isFinite(video.duration) &&
+        video.duration > 3 &&
+        clampedTarget >= video.duration - 0.5
+      ) {
+        clampedTarget = Math.max(0, video.duration - 0.8);
+      }
 
+      const prevTime = video.currentTime;
       const isSeekOnly = !isInitial && msg.action === "seek";
       const isPauseAction = !isInitial && msg.action === "pause";
       const seekThreshold = isPauseAction ? 1.5 : 0.4;
@@ -220,9 +345,11 @@
         video.playbackRate = rate;
       }
 
-      if (forceSeek || Math.abs(video.currentTime - targetTime) > seekThreshold) {
-        setRemoteSeekTarget(targetTime, { isAutoRealign });
-        video.currentTime = targetTime;
+      if (forceSeek || Math.abs(prevTime - clampedTarget) > seekThreshold) {
+        setRemoteSeekTarget(clampedTarget, { isAutoRealign });
+        video.currentTime = clampedTarget;
+        lastStableTime = clampedTarget;
+        lastStableTimeAt = Date.now();
       }
 
       if (!isSeekOnly) {
@@ -239,11 +366,23 @@
         }
       }
 
+      debug("applied", {
+        action: msg.action || (isInitial ? "init" : "state"),
+        t: Number(clampedTarget.toFixed(2)),
+        playing,
+        rate,
+        traceId: msg.traceId,
+        v: msg.version,
+      });
+
       if (showToast && msg.action) {
+        if (msg.action === "seek" && Math.abs(prevTime - clampedTarget) < 1.2) {
+          return;
+        }
         const labels = {
           play: "对方开始播放",
           pause: "对方暂停了",
-          seek: `对方跳转至 ${formatTime(targetTime)}`,
+          seek: `对方跳转至 ${formatTime(clampedTarget)}`,
           rate: `对方调至 ${rate}x 倍速`,
         };
         if (labels[msg.action]) {
@@ -389,6 +528,12 @@
           armRateLock(rounded);
           video.playbackRate = rounded;
         }
+        if (!catchupActive) {
+          debug("drift_nudge", {
+            diff: Number(diff.toFixed(2)),
+            nudge: rounded,
+          });
+        }
         catchupActive = true;
         return;
       }
@@ -398,19 +543,38 @@
         video.playbackRate = baseRate;
         catchupActive = false;
       }
+      debug("drift_snap", {
+        diff: Number(diff.toFixed(2)),
+        target: Number(targetTime.toFixed(2)),
+      });
       setRemoteSeekTarget(targetTime, { isAutoRealign: true });
       video.currentTime = targetTime;
+      lastStableTime = targetTime;
+      lastStableTimeAt = Date.now();
     }
 
     function onPlay() {
       if (awayMode || decisionLocked || soloMode) {
         notifyBlockedIfAligning();
+        if (!soloMode) {
+          debug("blocked", { action: "play", reason: decisionLocked ? "decision_locked" : "away" });
+        }
         return;
       }
-      if (Date.now() < initGuardUntil && !hasRecentUserGesture(1500)) return;
+      if (isStaleVideoMedia(boundVideo || adapter.getVideoElement())) {
+        debug("blocked", { action: "play", reason: "stale_media" });
+        return;
+      }
+      if (Date.now() < initGuardUntil && !hasRecentUserGesture(1500)) {
+        debug("blocked", { action: "play", reason: "init_guard" });
+        return;
+      }
       if (!active || !synced || inAd) return;
       if (syncedPlaying === true) return;
-      if (Date.now() < remoteToggleGuardUntil && syncedPlaying === false) return;
+      if (Date.now() < remoteToggleGuardUntil && syncedPlaying === false) {
+        debug("blocked", { action: "play", reason: "remote_toggle_guard" });
+        return;
+      }
       const video = boundVideo || adapter.getVideoElement();
       const vid = adapter.getVideoId();
       if (
@@ -428,6 +592,10 @@
     }
 
     function onPause() {
+      if (isStaleVideoMedia(boundVideo || adapter.getVideoElement())) {
+        debug("blocked", { action: "pause", reason: "stale_media" });
+        return;
+      }
       if (document.visibilityState === "hidden") {
         if (!active || soloMode || awayMode || decisionLocked || inAd) return;
         const video = boundVideo || adapter.getVideoElement();
@@ -439,12 +607,21 @@
       }
       if (awayMode || decisionLocked || soloMode) {
         notifyBlockedIfAligning();
+        if (!soloMode) {
+          debug("blocked", { action: "pause", reason: decisionLocked ? "decision_locked" : "away" });
+        }
         return;
       }
-      if (Date.now() < initGuardUntil && !hasRecentUserGesture(1500)) return;
+      if (Date.now() < initGuardUntil && !hasRecentUserGesture(1500)) {
+        debug("blocked", { action: "pause", reason: "init_guard" });
+        return;
+      }
       if (!active || !synced || inAd) return;
       if (syncedPlaying === false) return;
-      if (Date.now() < remoteToggleGuardUntil && syncedPlaying === true) return;
+      if (Date.now() < remoteToggleGuardUntil && syncedPlaying === true) {
+        debug("blocked", { action: "pause", reason: "remote_toggle_guard" });
+        return;
+      }
       syncedPlaying = false;
       emitControl("pause");
     }
@@ -455,12 +632,31 @@
 
       if (pendingRemoteSeekTarget !== null) {
         const elapsedMs = Date.now() - pendingRemoteSeekAt;
+        const elapsedSec = Math.max(0, elapsedMs / 1000);
+        const rate = video.playbackRate || baseRate || 1;
+        const recentGesture = hasRecentUserGesture(1500);
+        const baseTol = recentGesture ? 0.8 : 1.5;
+        const expectedLivePos =
+          pendingRemoteSeekTarget + (!video.paused ? elapsedSec * rate : 0);
+        const liveTol = recentGesture ? 0.8 : Math.max(1.5, elapsedSec * rate + 1.0);
         const isExpired = elapsedMs > 15000;
         const isEcho =
-          !isExpired && Math.abs(video.currentTime - pendingRemoteSeekTarget) <= 0.8;
+          !isExpired &&
+          (Math.abs(video.currentTime - pendingRemoteSeekTarget) <= baseTol ||
+            Math.abs(video.currentTime - expectedLivePos) <= liveTol);
+        const prevTarget = pendingRemoteSeekTarget;
         const wasAutoRealign = pendingRemoteSeekIsAutoRealign;
         clearRemoteSeekTarget();
         if (isEcho) {
+          lastStableTime = video.currentTime;
+          lastStableTimeAt = Date.now();
+          if (!wasAutoRealign || elapsedMs >= 1000) {
+            debug("seek_echo", {
+              target: Number(prevTarget.toFixed(2)),
+              actual: Number(video.currentTime.toFixed(2)),
+              elapsedMs,
+            });
+          }
           if (
             !wasAutoRealign &&
             elapsedMs >= 1500 &&
@@ -476,13 +672,47 @@
           }
           return;
         }
+        if (!isExpired && Math.abs(video.currentTime - prevTarget) <= 4.0) {
+          debug("seek_echo_miss", {
+            target: Number(prevTarget.toFixed(2)),
+            actual: Number(video.currentTime.toFixed(2)),
+            elapsedMs,
+          });
+        }
       }
 
       if (awayMode || decisionLocked || soloMode) {
         notifyBlockedIfAligning();
+        if (!soloMode) {
+          debug("blocked", { action: "seek", reason: decisionLocked ? "decision_locked" : "away" });
+        }
         return;
       }
-      if (Date.now() < initGuardUntil && !hasRecentUserGesture(1500)) return;
+      if (isStaleVideoMedia(video)) {
+        debug("blocked", { action: "seek", reason: "stale_media" });
+        return;
+      }
+      if (!hasRecentUserGesture(2000) && lastStableTime !== null) {
+        const expectedStable =
+          lastStableTime +
+          (!video.paused && lastStableTimeAt > 0
+            ? Math.min(3, (Date.now() - lastStableTimeAt) / 1000) * (video.playbackRate || 1)
+            : 0);
+        const jumpDelta = Math.abs(video.currentTime - expectedStable);
+        if (jumpDelta < 1.8) {
+          debug("blocked", {
+            action: "seek",
+            reason: "micro_seek_no_gesture",
+            t: Number(video.currentTime.toFixed(2)),
+            delta: Number(jumpDelta.toFixed(2)),
+          });
+          return;
+        }
+      }
+      if (Date.now() < initGuardUntil && !hasRecentUserGesture(1500)) {
+        debug("blocked", { action: "seek", reason: "init_guard" });
+        return;
+      }
       if (!active || !synced || inAd) return;
       clearTimeout(seekDebounceTimer);
       seekDebounceTimer = setTimeout(() => {
@@ -523,6 +753,11 @@
           Math.abs(video.currentTime - pendingRemoteSeekTarget) > 2.0)
       ) {
         clearRemoteSeekTarget();
+      }
+
+      if (active && !inAd && !video.seeking && !video.paused && video.readyState >= 2) {
+        lastStableTime = video.currentTime;
+        lastStableTimeAt = Date.now();
       }
 
       if (active && !inAd && !video.seeking && !video.paused && !awayMode && !decisionLocked) {
@@ -627,9 +862,14 @@
       boundVideo.removeEventListener("seeked", onSeeked);
       boundVideo.removeEventListener("timeupdate", onTimeUpdate);
       boundVideo.removeEventListener("ratechange", onRateChange);
+      boundVideo.removeEventListener("emptied", onMediaEmptied);
+      boundVideo.removeEventListener("loadedmetadata", onMediaLoaded);
+      boundVideo.removeEventListener("loadeddata", onMediaLoaded);
       boundVideo = null;
       syncedPlaying = null;
       remoteToggleGuardUntil = 0;
+      lastStableTime = null;
+      lastStableTimeAt = 0;
       clearRemoteSeekTarget();
     }
 
@@ -638,6 +878,7 @@
       if (!video || video === boundVideo) return;
       unbindVideo();
       boundVideo = video;
+      videoSwitchFreshMediaSeen = true;
       baseRate = video.playbackRate || 1;
       if (syncedPlaying === null) {
         syncedPlaying = !video.paused;
@@ -647,6 +888,9 @@
       video.addEventListener("seeked", onSeeked);
       video.addEventListener("timeupdate", onTimeUpdate);
       video.addEventListener("ratechange", onRateChange);
+      video.addEventListener("emptied", onMediaEmptied);
+      video.addEventListener("loadedmetadata", onMediaLoaded);
+      video.addEventListener("loadeddata", onMediaLoaded);
     }
 
     function checkAdTransition() {
@@ -702,6 +946,11 @@
       syncedPlaying = null;
       remoteToggleGuardUntil = 0;
       lastProgressTickAt = 0;
+      videoSwitchAt = 0;
+      videoSwitchPrevTime = 0;
+      videoSwitchFreshMediaSeen = true;
+      lastStableTime = null;
+      lastStableTimeAt = 0;
       clearRemoteSeekTarget();
       window.removeEventListener("pointerdown", markUserGesture, true);
       window.removeEventListener("pointerup", markUserGesture, true);
@@ -756,6 +1005,8 @@
       applyInitialState,
       seekAndSyncTo,
       handleDriftCheck,
+      notifyVideoChanged,
+      hasRecentUserGesture,
       resetVersion() {
         lastAppliedVersion = 0;
       },

@@ -4,6 +4,42 @@
 
 ---
 
+## 🤖 给 AI 助手的一键部署提示词（新手直接复制）
+
+> 如果你不熟悉 Cloudflare 或命令行，只需把本仓库打开在你的 AI 编程工具中（如 Antigravity、Cursor、Claude Code、Windsurf、GitHub Copilot 等），直接复制下方整段提示词发给 AI，让它一步步带你完成注册与部署：
+
+````markdown
+请协助我从零完成当前项目（`yt-sync`）的 Cloudflare 后端部署与浏览器扩展打包安装。请一步一步引导我操作，每一步先检查我的本机环境或等我确认后再继续：
+
+1. **引导注册与开通 Cloudflare 免费账号**
+   - 指导我打开 https://dash.cloudflare.com/sign-up 注册免费账号并完成邮箱验证；
+   - 说明本项目使用 Cloudflare Workers Free Plan + Durable Objects SQLite 免费额度即可运行（个人/好友同步观影无需绑定信用卡付费升级）；
+   - 提醒我记住首次部署时在 Cloudflare 控制台或命令行选择的 `*.workers.dev` 个人子域名。
+
+2. **检查并准备本地 Node.js 环境**
+   - 检查本机 `node -v`（建议 v20+）与 `npm -v`；如果未安装，指导我在当前系统安装 Node.js LTS。
+
+3. **登录 Wrangler 并部署信令服务端**
+   - 进入 `server/` 目录执行 `npx wrangler login`（指引我在弹出的浏览器页点击 Authorize 登录）；
+   - 执行 `npx wrangler deploy` 部署 Durable Object `SyncRoom`，从终端输出提取我真实的 `https://yt-sync.<我的子域名>.workers.dev` 地址。
+
+4. **运行线上全链路自检**
+   - 使用上一步拿到的真实域名执行：`YT_SYNC_HOST="yt-sync.<我的子域名>.workers.dev" node server/test_live.mjs`，确认全部测试通过。
+
+5. **配置本地扩展并打包安装**
+   - 把我真实的 Worker 域名写入本地以下 3 个文件（替换占位符 `yt-sync.your-subdomain.workers.dev`）：
+     1. `extension/manifest.json`（`host_permissions`）
+     2. `extension/content/config.js`（`SERVER_HTTP` 与 `SERVER_WS`）
+     3. `extension/background/service-worker.js`（`SERVER_HTTP`）
+   - 将 `extension/` 目录**内部文件直接打包**为根目录就是 `manifest.json` 的 `yt-sync-extension.zip`（确保不含外层套壳目录）；
+   - 指导我在电脑端 Chrome / Edge 通过「开发者模式 -> 加载已解压的扩展程序（选择 `extension/`）」安装，以及在手机端支持扩展的 Chromium 浏览器（如 Kiwi / Edge / 狐猴浏览器）导入 `yt-sync-extension.zip` 安装。
+
+6. **安全红线**
+   - 严禁把我私有的 `*.workers.dev` 真实域名或 Cloudflare `account_id` 提交推送到公开 Git 仓库；如果后续需要提交代码，必须先恢复为占位符 `yt-sync.your-subdomain.workers.dev`。
+````
+
+---
+
 ## ⚠️ 平台支持现状
 
 | 平台 | 状态 | 说明 |
@@ -19,7 +55,10 @@
   - 实时同步播放、暂停、拖拽进度（200ms 防抖）、倍速变化与同站点切集；
   - 结合 `HEARTBEAT` 往返时延平滑测算并补偿双跳网络延迟（`发送端单程延迟 + 接收端单程延迟`）；
   - 每 5 秒随心跳附带三档漂移校准（偏差 `< 0.35s` 忽略、`0.35s ~ 1.5s` 按当前基础倍速相对乘算 `±8%` 即 `baseRate × 1.08 / 0.92` 微调追齐、`> 1.5s` 直接跳转对齐），切回前台双播时差距 `1.0s ~ 3.0s` 当场硬跳齐、`0.35s ~ 1.0s` 当场起追；
-  - 播/停状态幂等去重 + 跳转目标账本（`±0.8s` 回声吸收与 4 路撕单保护）+ 目标值匹配倍速锁（`±0.02` 误差才吞回声，微调期间长按 `2x` 加速永不误吞或误判插件冲突），消除双端操作反弹乒乓死循环。
+  - 播/停状态幂等去重 + 跳转目标账本（4 路撕单保护 + 按倍速动态放宽回声容差）+ 无手势微调过滤（拦截 `< 1.8s` 内部切画质/缓冲幽灵 `seeked`，`< 1.2s` 远程微调静默对齐不刷屏）+ 目标值匹配倍速锁（`±0.02` 误差才吞回声，微调期间长按 `2x` 加速永不误吞或误判插件冲突），消除双端操作反弹乒乓与连环提示。
+- **片尾连播防连环跳与切集必达**
+  - SPA 切集严格屏蔽复用 `<video>` 残留的上部片尾时间与幽灵事件，远程跳转目标时间自动钳位在 `duration - 0.8s` 以内防止直接冲过片尾触发自动连播；
+  - `watchNavigation` 过滤同视频 URL 参数变化并可随时取消旧兜底跳转定时器；`CONTROL(video_change)` 绕过回归锁直接清卡并按 `version` 跟随防一方留在原地；切集后 2.5s 内无手势自动连播自动纠偏，整页刷新切集静默挂起 WS 并以 `mode: "resume"` 自动接回。
 - **广播房间 + 四合一心跳活跃机制**
   - 取消严苛的 2 人槽位与强制踢人，支持 2 人及小群多设备协同（软上限 16 连接）；
   - 5 秒四合一 `HEARTBEAT` 同时完成测延迟、刷新活跃状态、上报基准快照与捎带下发 `drift` 微调；
@@ -40,8 +79,9 @@
   - **内置快捷键与倍速插件冲突提醒**：同步中支持 `A`（`-0.1x`）、`D`（`+0.1x`）、`S`（`1.0x`）快捷键调速并右上角提示；若倍速在 600ms 内被 Global Speed 等第三方插件强行改回，自动拦截回传并弹出警告提示（15 秒冷却防刷屏）；
   - **非侵入式搜索选片提醒**：一方在 YouTube 搜索页选片时，另一方右上角浮现可点击胶囊「对方正在搜『关键词』 [一起挑片]」；
   - **YouTube 广告避让 & 移动端解锁**：自动识别 `.ad-showing` 广告并暂挂同步；移动端拦截自动播放时展示一键点击解锁遮罩。
-- **三层极简深色 Popup UI**
-  - 顶部状态与活跃人数 + 分级延迟徽章（`<80ms` / `80~180ms` / `>180ms`），独立配对码框（默认 `YT-8899`，点击全选、随机生成、一键复制），桌面/手机触屏均直观无需悬停猜按钮；任意网页支持一键切回同步标签页或在空白页先 `/peek` 房间并自动新开视频页直达。
+- **三层极简深色 Popup UI & 轻量三端排障导出**
+  - 顶部状态与活跃人数 + 分级延迟徽章（`<80ms` / `80~180ms` / `>180ms`），独立配对码框（默认 `YT-8899`，点击全选、随机生成、一键复制），桌面/手机触屏均直观无需悬停猜按钮；任意网页支持一键切回同步标签页或在空白页先 `/peek` 房间并自动新开视频页直达；
+  - 弹窗底部提供低调「**导出排障日志 / 清空**」入口：过滤式记录客户端关键操作/拦截原因/3s 切集落点检测 `nav_miss`（400 条本地环形落盘），服务端 `SyncRoom` 在非心跳关键信令落盘保存最近 150 条路由日志（防 DO 休眠丢失，房间清空即删库）；一键导出自动带 6 位 `traceId` 关联并完成域名/房间码/标题/视频 ID 脱敏的三端原始 JSON（兼顾剪贴板兜底）。
 
 ---
 
@@ -63,6 +103,7 @@
 | **日常播控同步** | `CONTROL`（`play` / `pause` / `seek` / `rate` / `video_change`） | `CONTROL`（附带 `totalDelay` 与单调 `version`） | 毫秒级同步操作并切换 `refPeerId` |
 | **心跳保活与纠偏** | `HEARTBEAT`（时间戳 `t`、单程 `delay`、播放快照；暂离时发 `{}` 空包） | `HEARTBEAT_ACK`（回传 `t`、活跃数、`revived`、`drift`） | 测算 RTT、探测半开假死、维持房间活跃、下发漂移校准 |
 | **状态与辅助提示** | `LEAVE`<br>`SOLO_ENTER` / `SOLO_EXIT`<br>`STATUS` / `SEARCHING` | `PEER_LEFT`<br>`PEER_STATUS` / `STATUS` / `PEER_SEARCHING`<br>`SOLO_WAITING_PEER` | 退出提示、先看模式、广告避让与搜索选片联动 |
+| **三端排障导出** | `DEBUG_DUMP_REQ`<br>`DEBUG_DUMP_DATA` | `DEBUG_DUMP_COLLECT`<br>`DEBUG_DUMP_RES` | 携带 `traceId` 一键拉取对端快照 + 服务端抗休眠路由日志合并导出 |
 
 ### 三、客户端状态机
 
@@ -156,7 +197,8 @@ sequenceDiagram
    - **首连不死等缓冲 & 慢跳转核对**：`waitVideoReady(1500)` 防止移动端 `readyState === 0` 卡死“等待中”，并挂一次性 `loadedmetadata` 监听在元数据就绪时按流逝时间追齐；单次拖动缓冲 `≥ 1500ms` 落地后自动触发一次探活核对。
 2. **防回声 / 防乒乓死循环机制**
    - **播/停幂等状态 + 600ms 反向保护期**：`engine.js` 记录最后确认的房间播放态 `syncedPlaying`，重复 `play` / `pause` 直接跳过；远端写入本地触发的异步事件受 `remoteToggleGuardUntil` 屏蔽。
-   - **跳转目标账本与 4 路撕单**：放弃脆弱的固定时间锁，改用 `pendingRemoteSeekTarget` 记录远端目标秒数。`onSeeked` 落点在 `±0.8s` 内即判定回声吞噬并当场撕单；此外通过「正常完成 `seeked`」「`onTimeUpdate` 非寻址状态下走远 `> 2s`」「15 秒兜底过期」「生命周期/切断重置」四条路径保证账本永不死锁。
+   - **跳转目标账本、防误触过滤与 4 路撕单**：放弃脆弱的固定时间锁，改用 `pendingRemoteSeekTarget` 记录远端目标秒数。`onSeeked` 结合等待期间的播放推进量（`elapsedSec × playbackRate`）放宽无手势回声容差，防止倍速或慢缓冲误判反弹；对无手势且相对 `lastStableTime` 跳动 `< 1.8s` 的内部切画质/缓冲 `seeked` 直接静默拦截，收到 `< 1.2s` 的远程 `seek` 只对齐进度不弹提示刷屏；同时通过「正常完成 `seeked`」「`onTimeUpdate` 非寻址状态下走远 `> 2s`」「15 秒兜底过期」「生命周期/切断重置」四条路径保证账本永不死锁。
+   - **片尾切集防连环跳与必达跟片**：切集只发 `video_change(0s)` 并通过 `notifyVideoChanged()` / `isStaleVideoMedia()` 屏蔽复用 `<video>` 在媒体卸任前的旧结尾时间戳；`applyRemoteState()` 自动将远程时间钳位在 `duration - 0.8s` 以内以免跳超片尾触发自动连播；`followRemoteVideo()` 优先于返回决断锁执行并配合 3 秒 `nav_miss` 回看与静默 `pagehide` 重载衔接，根治一方留在原地与连环跳片。
    - **目标值匹配倍速锁**：`consumeRateLock(actualRate)` 仅在当前 `playbackRate` 与锁目标误差 `≤ 0.02` 时判定为回声吞掉；即使微调到 `1.08x` 后 `400ms` 内用户立刻长按 `2.0x` 加速，也不会被误吞或误判 Global Speed 冲突，同步发出 `CONTROL(rate)` 让双端齐步切至 `2x`。
    - **`CONTROL(seek)` 与播停解耦**：远端 `seek` 只定位进度（`isSeekOnly`）不改变当前播停态，彻底杜绝拖进度连带把对方按播或按停的乒乓连环跳。
 3. **移动端后台 / 息屏防反拉、防死锁与通知栏拖拽**
@@ -185,9 +227,11 @@ sequenceDiagram
 │   │   ├── config.js             # 服务端地址与同步定时器配置
 │   │   ├── main.js               # 内容脚本总控、统一回归对账、防 00:00 守护与排队兑现
 │   │   ├── adapters/
-│   │   │   ├── youtube.js        # YouTube 播放、SPA 路由、广告与搜索识别
+│   │   │   ├── youtube.js        # YouTube 播放、SPA 路由、防连环跳定时器与搜索识别
 │   │   │   └── bilibili.js       # 哔哩哔哩适配器参考（当前暂不可用）
-│   │   ├── sync/engine.js        # 播控防抖、跳转账本、目标匹配倍速锁与三档漂移处理
+│   │   ├── debug/
+│   │   │   └── recorder.js       # 过滤式 400 条黑匣子日志、6 位 traceId 与自动脱敏导出
+│   │   ├── sync/engine.js        # 播控防抖、无手势微调过滤、片尾防残余、倍速锁与三档漂移处理
 │   │   ├── transport/ws-client.js# WebSocket 四合一心跳、12s 看门狗、600ms 探活与挂起重连
 │   │   └── ui/overlay.js         # Shadow DOM 浮层（Toast、旋转对齐胶囊、动态恢复卡）
 │   ├── popup/                    # 浏览器弹窗 UI（HTML / CSS / JS）

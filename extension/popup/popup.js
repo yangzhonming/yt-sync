@@ -309,4 +309,59 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
 });
 
+let debugToastTimer = null;
+function setDebugBtnLabel(text, durationMs = 2000) {
+  const btn = $("exportLogBtn");
+  if (!btn) return;
+  btn.textContent = text;
+  clearTimeout(debugToastTimer);
+  debugToastTimer = setTimeout(() => {
+    btn.textContent = "导出排障日志";
+  }, durationMs);
+}
+
+$("exportLogBtn")?.addEventListener("click", async () => {
+  const btn = $("exportLogBtn");
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = "打包三端日志…";
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "BG_EXPORT_DEBUG" });
+    if (!res?.ok || !res.json) {
+      setDebugBtnLabel("导出失败");
+      return;
+    }
+    try {
+      const blob = new Blob([res.json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = res.filename || "yt-sync-debug.json";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch {
+      // Ignore file download error on restricted mobile browsers.
+    }
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(res.json);
+      copied = true;
+    } catch {
+      // Clipboard fallback optional.
+    }
+    setDebugBtnLabel(copied ? "已下载并复制" : "已下载日志");
+  } catch {
+    setDebugBtnLabel("导出失败");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("clearLogBtn")?.addEventListener("click", async () => {
+  await chrome.runtime.sendMessage({ type: "BG_CLEAR_DEBUG" }).catch(() => {});
+  setDebugBtnLabel("已清空本地日志", 1600);
+});
+
 refreshState();

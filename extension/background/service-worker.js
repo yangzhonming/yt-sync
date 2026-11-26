@@ -7,6 +7,7 @@ const LAST_CLOSED_TTL_MS = 60 * 1000;
 
 const CONTENT_FILES = [
   "content/config.js",
+  "content/debug/recorder.js",
   "content/ui/overlay.js",
   "content/adapters/youtube.js",
   "content/adapters/bilibili.js",
@@ -467,6 +468,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       case "BG_CLEAR_RECENT_CLOSE": {
         await sessionStore.remove(LAST_CLOSED_KEY);
+        sendResponse({ ok: true });
+        return;
+      }
+
+      case "BG_EXPORT_DEBUG": {
+        const session = await getSession();
+        let targetTabId = session.activeTabId;
+        if (!targetTabId) {
+          const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+          const activeTab = tabs[0];
+          if (activeTab?.id && isSupportedSiteUrl(activeTab.url)) {
+            targetTabId = activeTab.id;
+          }
+        }
+        if (targetTabId) {
+          try {
+            const csRes = await chrome.tabs.sendMessage(targetTabId, { type: "CS_EXPORT_DEBUG" });
+            if (csRes?.ok && csRes.json) {
+              sendResponse(csRes);
+              return;
+            }
+          } catch {
+            // Fall through to local storage dump.
+          }
+        }
+        const stored = await sessionStore.get("ytSyncDebugLog");
+        const events = stored?.ytSyncDebugLog?.events || [];
+        const code = session.code || DEFAULT_CODE;
+        const maskedCode = code.length <= 4 ? "****" : `${code.slice(0, 2)}**${code.slice(-2)}`;
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        const payload = {
+          schema: "yt-sync-debug-v1",
+          exportedAt: new Date().toISOString(),
+          roomCode: maskedCode,
+          clockHint: { peerANow: Date.now(), serverNow: null, peerBNow: null },
+          peerA: { platform: "bg_fallback", snapshot: null, events },
+          peerB: { status: "offline" },
+          server: { status: "offline" },
+        };
+        sendResponse({
+          ok: true,
+          filename: `yt-sync-debug-${stamp}.json`,
+          json: JSON.stringify(payload, null, 2),
+        });
+        return;
+      }
+
+      case "BG_CLEAR_DEBUG": {
+        await sessionStore.remove("ytSyncDebugLog");
+        const session = await getSession();
+        if (session.activeTabId) {
+          chrome.tabs.sendMessage(session.activeTabId, { type: "CS_CLEAR_DEBUG" }).catch(() => {});
+        }
         sendResponse({ ok: true });
         return;
       }

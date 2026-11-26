@@ -17,6 +17,16 @@
   let currentLatencyMs = null;
   let currentActiveCount = 1;
   let expectedRemoteVideoId = null;
+  let lastVideoChangeVersion = 0;
+  let lastRemoteNavVideoId = null;
+  let lastRemoteNavAt = 0;
+  let remoteNavRetryCount = 0;
+  let suppressPagehideLeaveUntil = 0;
+  let pendingNavFollow = false;
+  let navSeq = 0;
+  let navVerifyTimer = null;
+  let lastDumpCollectAt = 0;
+  let pendingExportResolve = null;
   let isAway = false;
   let awayTime = null;
   let awayVideoId = null;
@@ -43,6 +53,74 @@
   let stopNavWatch = null;
   let wsClient = null;
   let engine = null;
+
+  const noopRecorder = {
+    log() {},
+    flushNow() {
+      return Promise.resolve();
+    },
+    clear() {
+      return Promise.resolve();
+    },
+    newTraceId() {
+      return Math.random().toString(36).slice(2, 8);
+    },
+    getCompactDump() {
+      return { clientNow: Date.now(), platform: "unknown", snapshot: null, events: [] };
+    },
+    buildExportPayload({ code = "", serverDump = null, peerDump = null, peerStatus = null, serverStatus = null } = {}) {
+      return {
+        schema: "yt-sync-debug-v1",
+        exportedAt: new Date().toISOString(),
+        roomCode: String(code || "").length > 4 ? `${String(code).slice(0, 2)}**${String(code).slice(-2)}` : "****",
+        clockHint: {
+          peerANow: Date.now(),
+          serverNow: serverDump?.serverNow || null,
+          peerBNow: peerDump?.clientNow || null,
+        },
+        peerA: { platform: "unknown", snapshot: buildDebugSnapshot(), events: [] },
+        peerB: peerDump ? { status: "ok", ...peerDump } : { status: peerStatus || "offline" },
+        server: serverDump ? { status: "ok", stats: serverDump.stats || {}, logs: serverDump.logs || [] } : { status: serverStatus || "offline" },
+      };
+    },
+    maskVideoId: (v) => v,
+  };
+
+  function buildDebugSnapshot() {
+    const video = adapter.getVideoElement();
+    const mask = (v) => (recorder ? recorder.maskVideoId(v) : v);
+    return {
+      uiState: currentUiState,
+      activeCount: currentActiveCount,
+      rttMs: currentLatencyMs,
+      videoId: mask(adapter.getVideoId()),
+      expectedRemoteVideoId: mask(expectedRemoteVideoId),
+      isAway,
+      pendingReturnChoice,
+      resumeCardOpen,
+      soloMode: Boolean(engine?.isSoloMode?.()),
+      decisionLocked: Boolean(engine?.isDecisionLocked?.()),
+      visibility: document.visibilityState,
+      video: video
+        ? {
+            t: Number((video.currentTime || 0).toFixed(2)),
+            dur: Number.isFinite(video.duration) ? Number(video.duration.toFixed(1)) : null,
+            paused: Boolean(video.paused),
+            ended: Boolean(video.ended),
+            readyState: video.readyState,
+            rate: video.playbackRate || 1,
+          }
+        : null,
+    };
+  }
+
+  const recorder = root.createDebugRecorder
+    ? root.createDebugRecorder({
+        getSnapshot: buildDebugSnapshot,
+        getPlatform: () =>
+          location.hostname.startsWith("m.") ? "mobile" : location.hostname.includes("bilibili") ? "bili" : "desktop",
+      })
+    : noopRecorder;
 
   function clearAwayState({ persist = true, hideCard = true } = {}) {
     clearTimeout(returnFallbackTimer);
@@ -225,12 +303,73 @@
       .catch(() => {});
   }
 
+  function followRemoteVideo(videoId, { toastText = "", version = null, traceId = null } = {}) {
+    if (!videoId) return false;
+    if (typeof version === "number") {
+      if (version < lastVideoChangeVersion) {
+        recorder.log("nav", "follow_ignored_old_v", { videoId, v: version, lastV: lastVideoChangeVersion, traceId });
+        return false;
+      }
+      lastVideoChangeVersion = version;
+    }
+    pendingResumeAction = null;
+    clearAwayState({ persist: true, hideCard: true });
+    overlay.hideDisconnectCard();
+    overlay.setPill("");
+    lastPeerState = null;
+
+    if (adapter.getVideoId() === videoId) {
+      expectedRemoteVideoId = null;
+      adapter.cancelPendingNavigate?.();
+      clearTimeout(navVerifyTimer);
+      navVerifyTimer = null;
+      return false;
+    }
+
+    expectedRemoteVideoId = videoId;
+    lastRemoteNavVideoId = videoId;
+    lastRemoteNavAt = Date.now();
+    remoteNavRetryCount = 0;
+    suppressPagehideLeaveUntil = Date.now() + 5000;
+    engine.notifyVideoChanged();
+    engine.resetVersion();
+    recorder.log("nav", "follow", { expected: videoId, actual: adapter.getVideoId(), v: version, traceId });
+    clearTimeout(navVerifyTimer);
+    navVerifyTimer = setTimeout(() => {
+      navVerifyTimer = null;
+      if (wsClient.isConnected() && currentUiState !== "idle" && adapter.getVideoId() !== videoId) {
+        recorder.log("nav", "nav_miss", {
+          expected: videoId,
+          actual: adapter.getVideoId(),
+          traceId,
+        });
+      }
+    }, 3000);
+    saveTabSession({
+      code: currentCode,
+      awayTime: null,
+      awayVideoId: null,
+      awayStartedAt: 0,
+      lastHeardVideoId: null,
+      lastHeardTime: null,
+      lastHeardAt: 0,
+      navFollowUntil: Date.now() + 15000,
+      navTargetVideoId: videoId,
+    });
+    if (toastText) {
+      overlay.showToast(toastText, 2000, "info");
+    }
+    adapter.navigateTo(videoId);
+    return true;
+  }
+
   async function notifyReadyForCurrentVideo() {
     const vid = adapter.getVideoId();
     if (!vid) return;
+    const seq = ++navSeq;
     engine.forcePauseLocal();
     await adapter.waitVideoReady(1500);
-    if (!wsClient.isConnected()) return;
+    if (!wsClient.isConnected() || seq !== navSeq || adapter.getVideoId() !== vid) return;
     wsClient.send({
       type: "SYNC_PULL",
       videoId: vid,
@@ -352,11 +491,13 @@
           }
         }, 600);
       }
+      const helloMode = pendingReturnChoice || resumeCardOpen || pendingNavFollow ? "resume" : "initial";
+      pendingNavFollow = false;
       wsClient.send({
         type: "HELLO",
         videoId: adapter.getVideoId(),
         videoTitle: adapter.getVideoTitle(),
-        mode: pendingReturnChoice || resumeCardOpen ? "resume" : "initial",
+        mode: helloMode,
         keepAway: false,
       });
     },
@@ -397,6 +538,7 @@
         !engine.isDecisionLocked() &&
         adapter.getVideoId()
       ) {
+        recorder.log("rx", "HEARTBEAT_ACK_REVIVED", { activeCount: nextCount });
         const video = adapter.getVideoElement();
         const revVid = adapter.getVideoId();
         awayVideoId = revVid;
@@ -470,11 +612,30 @@
       overlay.showToast("同设备新连接已接入，当前页已断开", 2800, "warn");
     },
 
+    onSocketEvent(ev) {
+      recorder.log("ws", ev?.ev || "event", {
+        code: ev?.code,
+        reason: ev?.reason,
+      });
+    },
+
     onClose() {
       // Handled by explicit stopSync or onRoomFull.
     },
 
     async onMessage(msg) {
+      if (msg?.type) {
+        recorder.log("rx", msg.type, {
+          action: msg.action,
+          vid: msg.videoId || msg.peerVideoId,
+          t: msg.currentTime,
+          playing: msg.playing,
+          rate: msg.playbackRate,
+          v: msg.version,
+          active: msg.activeCount,
+          traceId: msg.traceId,
+        });
+      }
       switch (msg.type) {
         case "WAITING": {
           if (
@@ -544,19 +705,14 @@
         case "NAVIGATE": {
           overlay.hideDisconnectCard();
           overlay.setPill("");
-          if (msg.autoFollow) {
-            pendingResumeAction = null;
-            clearAwayState({ persist: true, hideCard: true });
-            const title = msg.videoTitle ? `《${msg.videoTitle}》` : "新视频";
-            overlay.showToast(`对方已切换至${title}，正在跟随`, 2000, "info");
-          }
           if (msg.videoId) {
-            if (adapter.getVideoId() === msg.videoId) {
-              expectedRemoteVideoId = null;
+            const title = msg.videoTitle ? `《${msg.videoTitle}》` : "新视频";
+            const navigated = followRemoteVideo(msg.videoId, {
+              toastText: msg.autoFollow ? `对方已切换至${title}，正在跟随` : "",
+              traceId: msg.traceId || null,
+            });
+            if (!navigated) {
               await notifyReadyForCurrentVideo();
-            } else {
-              expectedRemoteVideoId = msg.videoId;
-              adapter.navigateTo(msg.videoId);
             }
           }
           break;
@@ -657,8 +813,7 @@
           }
           recordPeerState(msg);
           if (msg.videoId && adapter.getVideoId() !== msg.videoId) {
-            expectedRemoteVideoId = msg.videoId;
-            adapter.navigateTo(msg.videoId);
+            followRemoteVideo(msg.videoId, { traceId: msg.traceId || null });
             break;
           }
 
@@ -749,6 +904,7 @@
           await adapter.waitVideoReady(1500);
           if (!wsClient.isConnected()) break;
           if (msg.videoId && adapter.getVideoId() !== msg.videoId) break;
+          if (expectedRemoteVideoId && expectedRemoteVideoId !== adapter.getVideoId()) break;
           engine.applyInitialState(msg);
           overlay.showToast("已对齐进度，开始同步", 1800, "success");
           break;
@@ -759,17 +915,17 @@
           if (msg.action !== "video_change") {
             recordPeerState(msg);
           }
-          if (engine.isDecisionLocked() || pendingReturnChoice) return;
-          overlay.setPill("");
           if (msg.action === "video_change" && msg.videoId) {
-            if (adapter.getVideoId() !== msg.videoId) {
-              const title = msg.videoTitle ? `《${msg.videoTitle}》` : "新视频";
-              overlay.showToast(`已跟随切换至${title}`, 2000, "info");
-              expectedRemoteVideoId = msg.videoId;
-              adapter.navigateTo(msg.videoId);
-            }
+            const title = msg.videoTitle ? `《${msg.videoTitle}》` : "新视频";
+            followRemoteVideo(msg.videoId, {
+              toastText: adapter.getVideoId() !== msg.videoId ? `已跟随切换至${title}` : "",
+              version: typeof msg.version === "number" ? msg.version : null,
+              traceId: msg.traceId || null,
+            });
             return;
           }
+          if (engine.isDecisionLocked() || pendingReturnChoice) return;
+          overlay.setPill("");
           engine.applyRemoteState(msg, {
             forceSeek: msg.action === "seek",
             showToast: true,
@@ -828,11 +984,61 @@
           break;
         }
 
+        case "DEBUG_DUMP_COLLECT": {
+          const nowTs = Date.now();
+          if (nowTs - lastDumpCollectAt < 3000) break;
+          lastDumpCollectAt = nowTs;
+          wsClient.send({
+            type: "DEBUG_DUMP_DATA",
+            reqId: msg.reqId,
+            dump: recorder.getCompactDump(200),
+          });
+          break;
+        }
+
+        case "DEBUG_DUMP_RES": {
+          if (pendingExportResolve && (!msg.reqId || pendingExportResolve.reqId === msg.reqId)) {
+            const cb = pendingExportResolve.resolve;
+            pendingExportResolve = null;
+            cb(msg);
+          }
+          break;
+        }
+
         default:
           break;
       }
     },
   });
+
+  const TRACED_TX_TYPES = new Set([
+    "CONTROL",
+    "HELLO",
+    "SYNC_PULL",
+    "READY",
+    "REPORT_STATE",
+    "AWAY",
+    "BACK",
+    "CONFLICT_DECISION",
+  ]);
+  const rawWsSend = wsClient.send;
+  wsClient.send = (payload) => {
+    if (payload && TRACED_TX_TYPES.has(payload.type)) {
+      const traceId = payload.traceId || recorder.newTraceId();
+      const withTrace = { ...payload, traceId };
+      recorder.log("tx", payload.type, {
+        action: payload.action,
+        vid: payload.videoId,
+        t: payload.currentTime,
+        playing: payload.playing,
+        rate: payload.playbackRate,
+        mode: payload.mode,
+        traceId,
+      });
+      return rawWsSend(withTrace);
+    }
+    return rawWsSend(payload);
+  };
 
   function shieldLaggingAction(
     videoId,
@@ -928,6 +1134,9 @@
         wsClient.setBackgroundSuspended(true);
         saveTabSession({ code: currentCode, awayTime, awayVideoId, awayStartedAt });
       }
+    },
+    onDebugEvent(ev, data) {
+      recorder.log("eng", ev, data);
     },
   });
 
@@ -1246,11 +1455,15 @@
     wsClient.connect(currentCode, clientId);
 
     if (!stopNavWatch) {
-      stopNavWatch = adapter.watchNavigation(async ({ videoId, videoTitle }) => {
+      stopNavWatch = adapter.watchNavigation(async ({ videoId, prevVideoId, videoTitle }) => {
+        navSeq++;
         if (!wsClient.isConnected() || engine.isSoloMode()) return;
+        if (videoId && videoId === prevVideoId) return;
 
         if (!videoId) {
           expectedRemoteVideoId = null;
+          remoteNavRetryCount = 0;
+          adapter.cancelPendingNavigate?.();
           engine.setSynced(false);
           const search = adapter.getSearchInfo?.();
           if (search) {
@@ -1267,9 +1480,46 @@
 
         if (expectedRemoteVideoId && videoId === expectedRemoteVideoId) {
           expectedRemoteVideoId = null;
+          remoteNavRetryCount = 0;
+          clearTimeout(navVerifyTimer);
+          navVerifyTimer = null;
+          recorder.log("nav", "follow_ok", { videoId });
+          engine.notifyVideoChanged();
           await notifyReadyForCurrentVideo();
           return;
         }
+
+        if (
+          expectedRemoteVideoId &&
+          videoId !== expectedRemoteVideoId &&
+          Date.now() - lastRemoteNavAt < 2500 &&
+          !engine.hasRecentUserGesture(2000)
+        ) {
+          if (remoteNavRetryCount < 1) {
+            remoteNavRetryCount++;
+            adapter.navigateTo(expectedRemoteVideoId);
+          }
+          return;
+        }
+
+        expectedRemoteVideoId = null;
+        remoteNavRetryCount = 0;
+        adapter.cancelPendingNavigate?.();
+        lastPeerState = null;
+        clearAwayState({ persist: true, hideCard: true });
+        saveTabSession({
+          code: currentCode,
+          awayTime: null,
+          awayVideoId: null,
+          awayStartedAt: 0,
+          lastHeardVideoId: null,
+          lastHeardTime: null,
+          lastHeardAt: 0,
+          navFollowUntil: 0,
+          navTargetVideoId: null,
+        });
+        engine.notifyVideoChanged();
+        engine.resetVersion();
 
         if (currentUiState === "waiting" && !engine.isSynced()) {
           await notifyReadyForCurrentVideo();
@@ -1289,13 +1539,6 @@
             playbackRate: 1,
             playing: false,
           });
-          await adapter.waitVideoReady();
-          const snap = engine.readSnapshot();
-          wsClient.send({
-            type: "CONTROL",
-            action: snap.playing ? "play" : "seek",
-            ...snap,
-          });
         }
       });
     }
@@ -1308,6 +1551,17 @@
     }
     clearTimeout(recentClosePillTimer);
     recentClosePillTimer = null;
+    clearTimeout(navVerifyTimer);
+    navVerifyTimer = null;
+    expectedRemoteVideoId = null;
+    lastVideoChangeVersion = 0;
+    lastRemoteNavVideoId = null;
+    lastRemoteNavAt = 0;
+    remoteNavRetryCount = 0;
+    suppressPagehideLeaveUntil = 0;
+    pendingNavFollow = false;
+    navSeq++;
+    adapter.cancelPendingNavigate?.();
     pendingResumeAction = null;
     returnLinkConfirmed = false;
     suppressInitUntil = 0;
@@ -1436,7 +1690,8 @@
   );
 
   window.addEventListener("pagehide", (e) => {
-    if (e.persisted) {
+    recorder.flushNow();
+    if (e.persisted || Date.now() < suppressPagehideLeaveUntil) {
       wsClient.suspendForPageCache();
     } else if (wsClient.isConnected()) {
       wsClient.disconnect();
@@ -1475,6 +1730,52 @@
       }
       sendResponse({ ok: true });
       return false;
+    }
+    if (msg?.type === "CS_CLEAR_DEBUG") {
+      recorder.clear().then(() => sendResponse({ ok: true }));
+      return true;
+    }
+    if (msg?.type === "CS_EXPORT_DEBUG") {
+      (async () => {
+        await recorder.ready?.catch?.(() => {});
+        await recorder.flushNow();
+        let resMsg = null;
+        let serverStatus = "offline";
+        if (wsClient.isConnected()) {
+          const reqId = `exp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+          resMsg = await new Promise((resolve) => {
+            const timer = setTimeout(() => {
+              if (pendingExportResolve?.reqId === reqId) {
+                pendingExportResolve = null;
+                resolve(null);
+              }
+            }, 1800);
+            pendingExportResolve = {
+              reqId,
+              resolve(data) {
+                clearTimeout(timer);
+                resolve(data);
+              },
+            };
+            wsClient.send({ type: "DEBUG_DUMP_REQ", reqId, clientNow: Date.now() });
+          });
+          if (!resMsg) serverStatus = "timeout";
+        }
+        const payload = recorder.buildExportPayload({
+          code: currentCode,
+          serverDump: resMsg?.serverDump || null,
+          peerDump: resMsg?.peerDump || null,
+          peerStatus: resMsg?.peerStatus || (wsClient.isConnected() ? "timeout" : "offline"),
+          serverStatus,
+        });
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        sendResponse({
+          ok: true,
+          filename: `yt-sync-debug-${stamp}.json`,
+          json: JSON.stringify(payload, null, 2),
+        });
+      })();
+      return true;
     }
     return false;
   });
@@ -1532,7 +1833,17 @@
       }
 
       const currentVid = adapter.getVideoId();
-      if (
+      const isNavFollowBoot = Boolean(
+        tabSess?.navFollowUntil && Date.now() < tabSess.navFollowUntil
+      );
+      if (isNavFollowBoot) {
+        pendingNavFollow = true;
+        saveTabSession({
+          code: targetCode,
+          navFollowUntil: 0,
+          navTargetVideoId: null,
+        });
+      } else if (
         tabSess?.awayVideoId &&
         tabSess.awayVideoId === currentVid &&
         typeof tabSess.awayTime === "number" &&

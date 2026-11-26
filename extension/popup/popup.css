@@ -314,3 +314,31 @@ body {
     animation: none !important;
   }
 }
+
+.debug-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.link-btn {
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  border-radius: 5px;
+  color: rgba(255, 255, 255, 0.52);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.link-btn:hover {
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.link-muted {
+  color: rgba(255, 255, 255, 0.36);
+}

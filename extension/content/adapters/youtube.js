@@ -2,6 +2,15 @@
   const root = (window.YTSync = window.YTSync || {});
 
   function createYouTubeAdapter() {
+    let navFallbackTimer = null;
+
+    function cancelPendingNavigate() {
+      if (navFallbackTimer) {
+        clearTimeout(navFallbackTimer);
+        navFallbackTimer = null;
+      }
+    }
+
     function getVideoId(urlStr = location.href) {
       try {
         const u = new URL(urlStr);
@@ -68,6 +77,7 @@
     }
 
     function navigateTo(videoId) {
+      cancelPendingNavigate();
       if (!videoId || getVideoId() === videoId) return;
       if (videoId.startsWith("bili:")) {
         window.location.assign(`https://www.bilibili.com/${videoId.slice(5)}`);
@@ -86,13 +96,14 @@
         a.style.display = "none";
         ytdApp.appendChild(a);
         a.click();
-        a.remove();
+        setTimeout(() => a.remove(), 50);
 
-        setTimeout(() => {
+        navFallbackTimer = setTimeout(() => {
+          navFallbackTimer = null;
           if (getVideoId() !== expectedFullId) {
             window.location.assign(fullUrl);
           }
-        }, 800);
+        }, 900);
         return;
       }
 
@@ -127,23 +138,34 @@
     function watchNavigation(onChange) {
       let lastVideoId = getVideoId();
       let lastHref = location.href;
+      let emitTimer = null;
 
       const emitIfChanged = () => {
         const nextVideoId = getVideoId();
         const nextHref = location.href;
-        if (nextVideoId !== lastVideoId || nextHref !== lastHref) {
-          const prevVideoId = lastVideoId;
-          lastVideoId = nextVideoId;
+        const videoChanged = nextVideoId !== lastVideoId;
+        const searchHrefChanged = !nextVideoId && nextHref !== lastHref;
+        if (!videoChanged && !searchHrefChanged) {
           lastHref = nextHref;
-          // Give YouTube DOM a brief moment to update h1 title on SPA switch.
-          setTimeout(() => {
-            onChange({
-              videoId: nextVideoId,
-              prevVideoId,
-              videoTitle: getVideoTitle(),
-            });
-          }, 250);
+          return;
         }
+        if (videoChanged) {
+          cancelPendingNavigate();
+        }
+        const prevVideoId = lastVideoId;
+        lastVideoId = nextVideoId;
+        lastHref = nextHref;
+        clearTimeout(emitTimer);
+        // Give YouTube DOM a brief moment to update h1 title on SPA switch.
+        emitTimer = setTimeout(() => {
+          emitTimer = null;
+          if (getVideoId() !== nextVideoId) return;
+          onChange({
+            videoId: nextVideoId,
+            prevVideoId,
+            videoTitle: getVideoTitle(),
+          });
+        }, 250);
       };
 
       window.addEventListener("yt-navigate-finish", emitIfChanged);
@@ -151,6 +173,8 @@
       const poll = setInterval(emitIfChanged, 800);
 
       return () => {
+        clearTimeout(emitTimer);
+        cancelPendingNavigate();
         window.removeEventListener("yt-navigate-finish", emitIfChanged);
         window.removeEventListener("popstate", emitIfChanged);
         clearInterval(poll);
@@ -164,6 +188,7 @@
       getSearchInfo,
       isAdPlaying,
       navigateTo,
+      cancelPendingNavigate,
       waitVideoReady,
       watchNavigation,
     };
