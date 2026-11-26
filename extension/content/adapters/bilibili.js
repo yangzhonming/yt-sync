@@ -108,15 +108,30 @@
     function watchNavigation(onChange) {
       let lastVideoId = getVideoId();
       let lastHref = location.href;
+      let emitTimer = null;
+
+      const cancelPending = () => {
+        if (emitTimer) {
+          clearTimeout(emitTimer);
+          emitTimer = null;
+        }
+      };
 
       const emitIfChanged = () => {
         const nextVideoId = getVideoId();
         const nextHref = location.href;
+        if (nextVideoId && nextVideoId === lastVideoId) {
+          lastHref = nextHref;
+          return;
+        }
         if (nextVideoId !== lastVideoId || nextHref !== lastHref) {
           const prevVideoId = lastVideoId;
           lastVideoId = nextVideoId;
           lastHref = nextHref;
-          setTimeout(() => {
+          cancelPending();
+          emitTimer = setTimeout(() => {
+            emitTimer = null;
+            if (getVideoId() !== nextVideoId) return;
             onChange({
               videoId: nextVideoId,
               prevVideoId,
@@ -131,6 +146,7 @@
       const poll = setInterval(emitIfChanged, 700);
 
       return () => {
+        cancelPending();
         window.removeEventListener("popstate", emitIfChanged);
         window.removeEventListener("hashchange", emitIfChanged);
         clearInterval(poll);
@@ -144,6 +160,7 @@
       getSearchInfo,
       isAdPlaying,
       navigateTo,
+      cancelPendingNavigate() {},
       waitVideoReady,
       watchNavigation,
     };

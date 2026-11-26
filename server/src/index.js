@@ -954,6 +954,19 @@ export class SyncRoom extends DurableObject {
         setMeta(ws, { solo: true });
         const active = this.getActiveSockets(now);
         const otherActives = active.filter((s) => s !== ws && getMeta(s)?.hasHello);
+        const storedRefPeerId = await this.ctx.storage.get("refPeerId");
+        if (storedRefPeerId === myMeta.peerId && otherActives.length > 0) {
+          const nextRefWs = this.getReferenceSocket(otherActives, null);
+          const nextRefId = getMeta(nextRefWs)?.peerId;
+          if (nextRefId) {
+            await this.ctx.storage.put("refPeerId", nextRefId);
+          }
+        }
+        await this.recordDebug({
+          ev: "solo_enter",
+          peer: myMeta.peerId.slice(0, 6),
+          traceId: msg.traceId || null,
+        });
         for (const peer of otherActives) {
           safeSend(peer, { type: "ROOM_STATUS", activeCount: active.length });
         }
@@ -961,16 +974,42 @@ export class SyncRoom extends DurableObject {
       }
 
       case "SOLO_EXIT": {
-        const updated = setMeta(ws, { solo: false, soloExitedAt: now });
+        const patch = { solo: false, soloExitedAt: now };
+        if (msg.videoId) patch.videoId = msg.videoId;
+        if (msg.videoTitle !== undefined) patch.videoTitle = msg.videoTitle;
+        const updated = setMeta(ws, patch);
         const active = this.getActiveSockets(now);
         const otherActives = active.filter((s) => s !== ws && getMeta(s)?.hasHello);
+        await this.recordDebug({
+          ev: "solo_exit",
+          peer: updated.peerId.slice(0, 6),
+          vid: maskVid(updated.videoId),
+          active: active.length,
+          traceId: msg.traceId || null,
+        });
         if (otherActives.length > 0) {
           const refPeerId = await this.ctx.storage.get("refPeerId");
           const refWs = this.getReferenceSocket(otherActives, refPeerId);
+          const refMeta = getMeta(refWs);
+          if (refMeta?.videoId && updated.videoId && refMeta.videoId !== updated.videoId) {
+            await this.setNavigatingPeers([updated.peerId]);
+            safeSend(ws, {
+              type: "NAVIGATE",
+              videoId: refMeta.videoId,
+              videoTitle: refMeta.videoTitle || "",
+              autoFollow: true,
+              traceId: msg.traceId || null,
+            });
+            return;
+          }
           for (const peer of otherActives) {
             safeSend(peer, { type: "ROOM_STATUS", activeCount: active.length });
           }
-          safeSend(refWs, { type: "ASK_STATE", requesterPeerId: updated.peerId });
+          safeSend(refWs, {
+            type: "ASK_STATE",
+            requesterPeerId: updated.peerId,
+            traceId: msg.traceId || null,
+          });
           return;
         }
         const live = this.gcAndGetSockets(now);

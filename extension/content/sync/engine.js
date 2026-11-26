@@ -19,6 +19,7 @@
     beforeEmitSeek,
     onBlockedAction,
     onDebugEvent,
+    onRateSynced,
   }) {
     const { CONFIG } = root;
 
@@ -55,6 +56,7 @@
     let lastRemoteRateSetAt = 0;
     let expectedRemoteRate = 1;
     let lastConflictToastAt = 0;
+    let prevRateBeforeBoost = 1.0;
 
     let boundVideo = null;
     let videoPollTimer = null;
@@ -337,6 +339,7 @@
 
       baseRate = rate;
       catchupActive = false;
+      onRateSynced?.(baseRate);
 
       if (Math.abs(video.playbackRate - rate) > 0.01) {
         lastRemoteRateSetAt = Date.now();
@@ -571,7 +574,11 @@
       }
       if (!active || !synced || inAd) return;
       if (syncedPlaying === true) return;
-      if (Date.now() < remoteToggleGuardUntil && syncedPlaying === false) {
+      if (
+        Date.now() < remoteToggleGuardUntil &&
+        syncedPlaying === false &&
+        !hasRecentUserGesture(800)
+      ) {
         debug("blocked", { action: "play", reason: "remote_toggle_guard" });
         return;
       }
@@ -618,7 +625,11 @@
       }
       if (!active || !synced || inAd) return;
       if (syncedPlaying === false) return;
-      if (Date.now() < remoteToggleGuardUntil && syncedPlaying === true) {
+      if (
+        Date.now() < remoteToggleGuardUntil &&
+        syncedPlaying === true &&
+        !hasRecentUserGesture(800)
+      ) {
         debug("blocked", { action: "pause", reason: "remote_toggle_guard" });
         return;
       }
@@ -773,6 +784,36 @@
       }
     }
 
+    function setPlaybackRate(nextRate, { showToast = true } = {}) {
+      const video = adapter.getVideoElement();
+      if (!video) return false;
+      if (awayMode && !decisionLocked && !soloMode && active) {
+        onBlockedAction?.();
+        return false;
+      }
+      const raw = Number(nextRate);
+      if (!Number.isFinite(raw)) return false;
+      const clamped = Math.max(0.2, Math.min(4.0, Math.round(raw * 100) / 100));
+      baseRate = clamped;
+      catchupActive = false;
+      lastRemoteRateSetAt = 0;
+      armRateLock(clamped);
+      video.playbackRate = clamped;
+      onRateSynced?.(clamped);
+      if (showToast) {
+        const label = Number.isInteger(clamped * 10) ? clamped.toFixed(1) : String(clamped);
+        overlay.showToast(
+          `${soloMode ? "先看倍速" : "倍速"} ${label}x`,
+          1200,
+          "info"
+        );
+      }
+      if (!soloMode && synced) {
+        emitControl("rate");
+      }
+      return true;
+    }
+
     function onRateChange() {
       const video = boundVideo || adapter.getVideoElement();
       if (!video) return;
@@ -787,6 +828,12 @@
         !hasRecentUserGesture(1500) &&
         Math.abs(video.playbackRate - expectedRemoteRate) > 0.02
       ) {
+        debug("blocked", {
+          action: "rate",
+          reason: "external_rate_override",
+          actual: Number((video.playbackRate || 1).toFixed(2)),
+          expected: Number(expectedRemoteRate.toFixed(2)),
+        });
         if (Date.now() - lastConflictToastAt > 15000) {
           lastConflictToastAt = Date.now();
           overlay.showToast("检测到倍速被强制改回，建议关闭 Global Speed", 3000, "warn");
@@ -796,10 +843,12 @@
 
       baseRate = video.playbackRate;
       catchupActive = false;
+      onRateSynced?.(baseRate);
       emitControl("rate");
     }
 
     function onKeyDown(e) {
+      if (e.isTrusted === false || e.__ytSyncSynthetic) return;
       if (!active || inAd) return;
       if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
 
@@ -816,7 +865,7 @@
       }
 
       const key = typeof e.key === "string" ? e.key.toLowerCase() : "";
-      if (key !== "a" && key !== "d" && key !== "s") return;
+      if (key !== "a" && key !== "d" && key !== "s" && key !== "w") return;
 
       const video = adapter.getVideoElement();
       if (!video) return;
@@ -837,22 +886,16 @@
         nextRate = Math.max(0.2, Math.round((cur - 0.1) * 10) / 10);
       } else if (key === "s") {
         nextRate = 1.0;
+      } else if (key === "w") {
+        if (Math.abs(cur - 2.0) <= 0.02) {
+          nextRate = Math.abs(prevRateBeforeBoost - 2.0) > 0.02 ? prevRateBeforeBoost : 1.0;
+        } else {
+          prevRateBeforeBoost = cur;
+          nextRate = 2.0;
+        }
       }
 
-      baseRate = nextRate;
-      catchupActive = false;
-      lastRemoteRateSetAt = 0;
-      armRateLock(nextRate);
-      video.playbackRate = nextRate;
-      overlay.showToast(
-        `${soloMode ? "先看倍速" : "倍速"} ${nextRate.toFixed(1)}x`,
-        1200,
-        "info"
-      );
-
-      if (!soloMode && synced) {
-        emitControl("rate");
-      }
+      setPlaybackRate(nextRate, { showToast: true });
     }
 
     function unbindVideo() {
@@ -880,6 +923,7 @@
       boundVideo = video;
       videoSwitchFreshMediaSeen = true;
       baseRate = video.playbackRate || 1;
+      onRateSynced?.(baseRate);
       if (syncedPlaying === null) {
         syncedPlaying = !video.paused;
       }
@@ -943,6 +987,7 @@
       lastUserGestureAt = 0;
       lastRemoteRateSetAt = 0;
       lastConflictToastAt = 0;
+      prevRateBeforeBoost = 1.0;
       syncedPlaying = null;
       remoteToggleGuardUntil = 0;
       lastProgressTickAt = 0;
@@ -988,7 +1033,23 @@
         awayMode = Boolean(val);
       },
       setSoloMode(val) {
-        soloMode = Boolean(val);
+        const next = Boolean(val);
+        if (soloMode === next) return;
+        soloMode = next;
+        if (!soloMode) {
+          lastAppliedVersion = 0;
+          catchupActive = false;
+          remoteToggleGuardUntil = 0;
+          clearRemoteSeekTarget();
+          const v = boundVideo || adapter.getVideoElement();
+          syncedPlaying = v ? !v.paused : null;
+          if (v) {
+            baseRate = v.playbackRate || 1;
+            lastStableTime = v.currentTime;
+            lastStableTimeAt = Date.now();
+            onRateSynced?.(baseRate);
+          }
+        }
       },
       setDecisionLocked(val) {
         decisionLocked = Boolean(val);
@@ -1005,6 +1066,8 @@
       applyInitialState,
       seekAndSyncTo,
       handleDriftCheck,
+      setPlaybackRate,
+      getBaseRate: () => baseRate,
       notifyVideoChanged,
       hasRecentUserGesture,
       resetVersion() {

@@ -27,7 +27,16 @@
   let navVerifyTimer = null;
   let lastDumpCollectAt = 0;
   let pendingExportResolve = null;
+  let pendingSoloExit = false;
+  let soloExitFallbackTimer = null;
   let isAway = false;
+  const isBiliTouchDesktop = Boolean(
+    location.hostname === "www.bilibili.com" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches
+  );
+  let biliTouchPlayer = null;
+  let lastBiliSyncActive = false;
   let awayTime = null;
   let awayVideoId = null;
   let awayStartedAt = 0;
@@ -283,6 +292,29 @@
     };
   }
 
+  function syncBiliTouchPlayer() {
+    if (!biliTouchPlayer) return;
+    const hasVideo = Boolean(adapter.getVideoId());
+    if (!hasVideo) {
+      lastBiliSyncActive = false;
+      biliTouchPlayer.disable();
+      return;
+    }
+    const isSyncActive =
+      currentUiState === "waiting" ||
+      currentUiState === "synced" ||
+      currentUiState === "solo" ||
+      currentUiState === "reconnecting";
+    biliTouchPlayer.setActiveCount?.(currentActiveCount);
+    biliTouchPlayer.updateRate?.(engine?.getBaseRate?.() || 1);
+    if (!biliTouchPlayer.isActive?.()) {
+      biliTouchPlayer.enable({ startNative: false });
+    } else if (isSyncActive && !lastBiliSyncActive) {
+      biliTouchPlayer.enterTouchMode?.();
+    }
+    lastBiliSyncActive = isSyncActive;
+  }
+
   function reportBgState(patch) {
     if (patch.uiState) {
       if (patch.uiState === "waiting" && currentUiState !== "waiting") {
@@ -291,9 +323,13 @@
         waitingSinceAt = 0;
       }
       currentUiState = patch.uiState;
+      syncBiliTouchPlayer();
     }
     if (patch.latencyMs !== undefined) currentLatencyMs = patch.latencyMs;
-    if (patch.activeCount !== undefined) currentActiveCount = patch.activeCount;
+    if (patch.activeCount !== undefined) {
+      currentActiveCount = patch.activeCount;
+      biliTouchPlayer?.setActiveCount?.(currentActiveCount);
+    }
     chrome.runtime
       .sendMessage({
         type: "BG_UPDATE_STATE",
@@ -493,6 +529,9 @@
       }
       const helloMode = pendingReturnChoice || resumeCardOpen || pendingNavFollow ? "resume" : "initial";
       pendingNavFollow = false;
+      pendingSoloExit = false;
+      clearTimeout(soloExitFallbackTimer);
+      soloExitFallbackTimer = null;
       wsClient.send({
         type: "HELLO",
         videoId: adapter.getVideoId(),
@@ -638,6 +677,9 @@
       }
       switch (msg.type) {
         case "WAITING": {
+          pendingSoloExit = false;
+          clearTimeout(soloExitFallbackTimer);
+          soloExitFallbackTimer = null;
           if (
             pendingReturnChoice &&
             returnFallbackSent &&
@@ -703,6 +745,9 @@
         }
 
         case "NAVIGATE": {
+          pendingSoloExit = false;
+          clearTimeout(soloExitFallbackTimer);
+          soloExitFallbackTimer = null;
           overlay.hideDisconnectCard();
           overlay.setPill("");
           if (msg.videoId) {
@@ -790,6 +835,9 @@
         }
 
         case "INIT_STATE": {
+          pendingSoloExit = false;
+          clearTimeout(soloExitFallbackTimer);
+          soloExitFallbackTimer = null;
           clearTimeout(returnFallbackTimer);
           clearTimeout(awaySafetyTimer);
           clearTimeout(alignPillTimer);
@@ -980,6 +1028,9 @@
         }
 
         case "SOLO_WAITING_PEER": {
+          pendingSoloExit = false;
+          clearTimeout(soloExitFallbackTimer);
+          soloExitFallbackTimer = null;
           overlay.showToast("已退出先看，等待对方结束先看后自动同步", 2200, "info");
           break;
         }
@@ -1020,6 +1071,8 @@
     "AWAY",
     "BACK",
     "CONFLICT_DECISION",
+    "SOLO_ENTER",
+    "SOLO_EXIT",
   ]);
   const rawWsSend = wsClient.send;
   wsClient.send = (payload) => {
@@ -1138,7 +1191,29 @@
     onDebugEvent(ev, data) {
       recorder.log("eng", ev, data);
     },
+    onRateSynced(rate) {
+      biliTouchPlayer?.updateRate?.(rate);
+    },
   });
+
+  biliTouchPlayer =
+    isBiliTouchDesktop && root.createBiliTouchPlayer
+      ? root.createBiliTouchPlayer({ adapter, engine })
+      : null;
+
+  if (biliTouchPlayer) {
+    syncBiliTouchPlayer();
+    window.addEventListener("popstate", () => setTimeout(syncBiliTouchPlayer, 300));
+    window.addEventListener("hashchange", () => setTimeout(syncBiliTouchPlayer, 300));
+    let lastTouchVid = adapter.getVideoId();
+    setInterval(() => {
+      const nextVid = adapter.getVideoId();
+      if (nextVid !== lastTouchVid) {
+        lastTouchVid = nextVid;
+        syncBiliTouchPlayer();
+      }
+    }, 900);
+  }
 
   async function getOrCreateClientId() {
     try {
@@ -1154,17 +1229,60 @@
 
   function enterSoloMode() {
     if (currentUiState !== "synced" || engine.isSoloMode()) return;
+    pendingSoloExit = false;
+    clearTimeout(soloExitFallbackTimer);
+    soloExitFallbackTimer = null;
     engine.setSoloMode(true);
     wsClient.send({ type: "SOLO_ENTER" });
     reportBgState({ uiState: "solo", conflict: null });
     overlay.showToast("已进入先看模式（点插件图标可随时切回）", 1500, "info");
   }
 
+  function sendSoloExitRequest() {
+    pendingSoloExit = false;
+    clearTimeout(soloExitFallbackTimer);
+    const vid = adapter.getVideoId();
+    const title = adapter.getVideoTitle();
+    wsClient.send({ type: "SOLO_EXIT", videoId: vid, videoTitle: title });
+    soloExitFallbackTimer = setTimeout(() => {
+      soloExitFallbackTimer = null;
+      if (wsClient.isConnected() && currentUiState === "synced" && !engine.isSoloMode()) {
+        const curVid = adapter.getVideoId();
+        if (curVid) {
+          wsClient.send({
+            type: "SYNC_PULL",
+            videoId: curVid,
+            videoTitle: adapter.getVideoTitle(),
+            keepAway: false,
+            fallbackOnly: true,
+          });
+        }
+      }
+    }, 900);
+  }
+
   function exitSoloMode() {
     if (!engine.isSoloMode()) return;
+    clearTimeout(soloExitFallbackTimer);
+    soloExitFallbackTimer = null;
     engine.setSoloMode(false);
+    engine.resetVersion();
+    engine.armInitGuard(1500);
     reportBgState({ uiState: "synced", conflict: null });
-    wsClient.send({ type: "SOLO_EXIT" });
+    if (wsClient.isConnected()) {
+      sendSoloExitRequest();
+    } else {
+      pendingSoloExit = true;
+      overlay.setPill("正在重连并同步…", { tone: "amber", spinner: true });
+      wsClient.probeOrReconnect({
+        forceReconnect: false,
+        onAlive() {
+          if (pendingSoloExit) {
+            sendSoloExitRequest();
+          }
+        },
+      });
+    }
   }
 
   async function flushPendingResumeAction(via) {
@@ -1457,7 +1575,9 @@
     if (!stopNavWatch) {
       stopNavWatch = adapter.watchNavigation(async ({ videoId, prevVideoId, videoTitle }) => {
         navSeq++;
-        if (!wsClient.isConnected() || engine.isSoloMode()) return;
+        if (!wsClient.isConnected()) return;
+        syncBiliTouchPlayer();
+        if (engine.isSoloMode()) return;
         if (videoId && videoId === prevVideoId) return;
 
         if (!videoId) {
@@ -1560,6 +1680,9 @@
     remoteNavRetryCount = 0;
     suppressPagehideLeaveUntil = 0;
     pendingNavFollow = false;
+    pendingSoloExit = false;
+    clearTimeout(soloExitFallbackTimer);
+    soloExitFallbackTimer = null;
     navSeq++;
     adapter.cancelPendingNavigate?.();
     pendingResumeAction = null;
@@ -1580,6 +1703,7 @@
     wsClient.setBackgroundSuspended(false);
     wsClient.disconnect();
     overlay.clearAll();
+    syncBiliTouchPlayer();
     if (notifyBg) {
       reportBgState({
         uiState: "idle",

@@ -9,6 +9,7 @@ const CONTENT_FILES = [
   "content/config.js",
   "content/debug/recorder.js",
   "content/ui/overlay.js",
+  "content/ui/bili-touch-player.js",
   "content/adapters/youtube.js",
   "content/adapters/bilibili.js",
   "content/transport/ws-client.js",
