@@ -26,7 +26,8 @@
       return Boolean(
         els.resumeModal?.classList.contains("is-visible") ||
           els.disconnectModal?.classList.contains("is-visible") ||
-          els.unlockModal?.classList.contains("is-visible")
+          els.unlockModal?.classList.contains("is-visible") ||
+          els.conflictModal?.classList.contains("is-visible")
       );
     }
 
@@ -38,8 +39,11 @@
         host.style.cssText =
           "position:fixed;inset:0;pointer-events:none;z-index:2147483647;";
         shadow = host.attachShadow({ mode: "open" });
+        const siteAccent =
+          window.YTSync?.touch?.getSiteTheme?.()?.accent || "#ff0033";
         shadow.innerHTML = `
           <style>
+            :host { color-scheme: dark; forced-color-adjust: none; }
             * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; }
             .top-right {
               position: fixed;
@@ -159,7 +163,7 @@
               padding: 2px 9px;
               border-radius: 9999px;
               border: none;
-              background: #ff0033;
+              background: ${siteAccent};
               color: #ffffff;
               font-size: 11px;
               font-weight: 600;
@@ -286,6 +290,23 @@
               color: #ffffff;
               font-weight: 600;
             }
+            .btn-link {
+              background: transparent;
+              border: none;
+              color: rgba(255, 255, 255, 0.58);
+              font-size: 12px;
+              cursor: pointer;
+              padding: 2px 8px;
+              align-self: center;
+            }
+            .btn-link:hover { color: rgba(255, 255, 255, 0.9); }
+            .conflict-sub {
+              display: -webkit-box;
+              -webkit-line-clamp: 2;
+              -webkit-box-orient: vertical;
+              overflow: hidden;
+              word-break: break-word;
+            }
             .mono-line {
               font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
               font-variant-numeric: tabular-nums;
@@ -356,6 +377,19 @@
               </div>
             </div>
           </div>
+          <div id="conflictModal" class="modal-backdrop">
+            <div class="card">
+              <div>
+                <div class="card-title">发现不同视频</div>
+                <div id="conflictSub" class="card-sub conflict-sub"></div>
+              </div>
+              <div class="btn-row">
+                <button id="conflictFollowBtn" class="btn btn-primary" type="button">跟着走</button>
+                <button id="conflictPullBtn" class="btn btn-wait" type="button">拉进来</button>
+              </div>
+              <button id="conflictCancelBtn" class="btn-link" type="button">取消同步</button>
+            </div>
+          </div>
         `;
         els = {
           pill: shadow.getElementById("pill"),
@@ -370,6 +404,11 @@
           resumeSub: shadow.getElementById("resumeSub"),
           followCurrentBtn: shadow.getElementById("followCurrentBtn"),
           pullBackBtn: shadow.getElementById("pullBackBtn"),
+          conflictModal: shadow.getElementById("conflictModal"),
+          conflictSub: shadow.getElementById("conflictSub"),
+          conflictFollowBtn: shadow.getElementById("conflictFollowBtn"),
+          conflictPullBtn: shadow.getElementById("conflictPullBtn"),
+          conflictCancelBtn: shadow.getElementById("conflictCancelBtn"),
         };
       }
       if (host.parentNode !== mountTarget) {
@@ -438,6 +477,7 @@
         ensureMounted();
         this.hideUnlock();
         this.hideResumeCard();
+        this.hideConflictCard();
         els.toast.classList.remove("is-visible");
         els.disconnectModal.classList.add("is-visible");
         els.keepWaitBtn.onclick = () => {
@@ -460,6 +500,7 @@
         ensureMounted();
         this.hideDisconnectCard();
         this.hideResumeCard();
+        this.hideConflictCard();
         els.toast.classList.remove("is-visible");
         els.unlockModal.classList.add("is-visible");
         els.unlockBtn.onclick = () => {
@@ -487,6 +528,7 @@
         clearResumeTicker();
         this.hideDisconnectCard();
         this.hideUnlock();
+        this.hideConflictCard();
         els.toast.classList.remove("is-visible");
 
         const fmt = typeof formatTime === "function" ? formatTime : fallbackFormatTime;
@@ -548,12 +590,56 @@
         }
       },
 
+      showConflictCard({ peerVideoId, peerVideoTitle, onFollow, onPull, onCancel }) {
+        ensureMounted();
+        this.hideDisconnectCard();
+        this.hideUnlock();
+        this.hideResumeCard();
+        els.toast.classList.remove("is-visible");
+        const vid = String(peerVideoId || "");
+        const siteLabel = vid.startsWith("bili:")
+          ? "B 站 · "
+          : vid.startsWith("yt:")
+            ? "YouTube · "
+            : "";
+        const titleText = String(peerVideoTitle || "").trim() || vid || "另一部视频";
+        if (els.conflictSub) {
+          els.conflictSub.textContent = `对方正在看 ${siteLabel}《${titleText}》`;
+        }
+        els.conflictModal?.classList.add("is-visible");
+        if (els.conflictFollowBtn) {
+          els.conflictFollowBtn.onclick = () => {
+            this.hideConflictCard();
+            onFollow?.();
+          };
+        }
+        if (els.conflictPullBtn) {
+          els.conflictPullBtn.onclick = () => {
+            this.hideConflictCard();
+            onPull?.();
+          };
+        }
+        if (els.conflictCancelBtn) {
+          els.conflictCancelBtn.onclick = () => {
+            this.hideConflictCard();
+            onCancel?.();
+          };
+        }
+      },
+
+      hideConflictCard() {
+        if (els.conflictModal) {
+          els.conflictModal.classList.remove("is-visible");
+        }
+      },
+
       clearAll() {
         clearResumeTicker();
         this.setPill("");
         this.hideDisconnectCard();
         this.hideUnlock();
         this.hideResumeCard();
+        this.hideConflictCard();
         if (els.toast) els.toast.classList.remove("is-visible");
       },
     };

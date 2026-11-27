@@ -8,6 +8,12 @@ const LAST_CLOSED_TTL_MS = 60 * 1000;
 const CONTENT_FILES = [
   "content/config.js",
   "content/debug/recorder.js",
+  "content/ui/touch/assets.js",
+  "content/ui/touch/theme.js",
+  "content/ui/touch/styles.js",
+  "content/ui/touch/fullscreen.js",
+  "content/ui/touch/gestures.js",
+  "content/ui/touch/core-shell.js",
   "content/ui/overlay.js",
   "content/ui/bili-touch-player.js",
   "content/ui/yt-touch-player.js",

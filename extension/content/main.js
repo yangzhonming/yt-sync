@@ -16,6 +16,7 @@
   let currentUiState = "idle";
   let currentLatencyMs = null;
   let currentActiveCount = 1;
+  let lastConflictInfo = null;
   let expectedRemoteVideoId = null;
   let lastVideoChangeVersion = 0;
   let lastRemoteNavVideoId = null;
@@ -311,8 +312,10 @@
       currentUiState === "waiting" ||
       currentUiState === "synced" ||
       currentUiState === "solo" ||
-      currentUiState === "reconnecting";
+      currentUiState === "reconnecting" ||
+      currentUiState === "conflict";
     tp.setActiveCount?.(currentActiveCount);
+    tp.setSyncState?.(currentUiState);
     tp.updateRate?.(engine?.getBaseRate?.() || 1);
     if (!tp.isActive?.()) {
       tp.enable({ startNative: false });
@@ -639,6 +642,8 @@
 
     onReconnecting() {
       returnLinkConfirmed = false;
+      lastConflictInfo = null;
+      overlay.hideConflictCard?.();
       engine.setSynced(false);
       overlay.setPill("断线重连中…", { tone: "orange" });
       reportBgState({ uiState: "reconnecting", conflict: null });
@@ -725,6 +730,8 @@
             clearTimeout(returnFallbackTimer);
             clearTimeout(awaySafetyTimer);
           }
+          lastConflictInfo = null;
+          overlay.hideConflictCard?.();
           engine.setSynced(false);
           overlay.hideDisconnectCard();
           reportBgState({
@@ -739,16 +746,17 @@
           pendingReturnChoice = false;
           engine.setSynced(false);
           overlay.hideDisconnectCard();
+          lastConflictInfo = {
+            peerVideoId: msg.peerVideoId,
+            peerVideoTitle: msg.peerVideoTitle || "",
+          };
           reportBgState({
             uiState: "conflict",
             activeCount:
               typeof msg.activeCount === "number" ? msg.activeCount : currentActiveCount,
-            conflict: {
-              peerVideoId: msg.peerVideoId,
-              peerVideoTitle: msg.peerVideoTitle || "",
-            },
+            conflict: lastConflictInfo,
           });
-          overlay.showToast("发现不同视频，请在插件弹窗选择", 2500, "warn");
+          presentConflictCard(lastConflictInfo);
           break;
         }
 
@@ -756,6 +764,8 @@
           pendingSoloExit = false;
           clearTimeout(soloExitFallbackTimer);
           soloExitFallbackTimer = null;
+          lastConflictInfo = null;
+          overlay.hideConflictCard?.();
           overlay.hideDisconnectCard();
           overlay.setPill("");
           if (msg.videoId) {
@@ -796,6 +806,8 @@
             overlay.setPill("");
           }
           if (count >= 2 && ["waiting", "reconnecting", "idle"].includes(currentUiState)) {
+            lastConflictInfo = null;
+            overlay.hideConflictCard?.();
             engine.setSynced(true);
             overlay.hideDisconnectCard();
             reportBgState({
@@ -823,6 +835,8 @@
               ? msg.activeCount
               : Math.max(2, currentActiveCount);
           currentActiveCount = count;
+          lastConflictInfo = null;
+          overlay.hideConflictCard?.();
           engine.setSynced(true);
           overlay.hideDisconnectCard();
           overlay.setPill("");
@@ -1019,6 +1033,8 @@
           suppressRevivedUntil = 0;
           clearAwayState({ persist: true, hideCard: true });
           currentActiveCount = 1;
+          lastConflictInfo = null;
+          overlay.hideConflictCard?.();
           engine.setSoloMode(false);
           engine.setSynced(false);
           engine.forcePauseLocal();
@@ -1241,13 +1257,73 @@
     adapter.navigateTo(videoId);
   }
 
+  function submitConflictDecision(decision) {
+    lastConflictInfo = null;
+    overlay.hideConflictCard?.();
+    wsClient.send({ type: "CONFLICT_DECISION", decision });
+  }
+
+  function presentConflictCard(info) {
+    overlay.showConflictCard?.({
+      peerVideoId: info?.peerVideoId,
+      peerVideoTitle: info?.peerVideoTitle,
+      onFollow: () => submitConflictDecision("FOLLOW_PEER"),
+      onPull: () => submitConflictDecision("PULL_PEER"),
+      onCancel: () => handleTouchSyncToggle("disconnect"),
+    });
+  }
+
+  async function handleTouchSyncToggle(action) {
+    const tp = biliTouchPlayer || ytTouchPlayer;
+    if (action === "conflict") {
+      if (lastConflictInfo) {
+        presentConflictCard(lastConflictInfo);
+      } else {
+        tp?.showMiniToast?.("请在弹窗中选择同步方向", 1800);
+      }
+      return;
+    }
+    if (action === "connect") {
+      let code = currentCode || root.CONFIG.DEFAULT_CODE;
+      try {
+        const saved = await chrome.storage.local.get("pairingCode");
+        if (saved?.pairingCode) code = saved.pairingCode;
+      } catch {}
+      try {
+        const res = await chrome.runtime.sendMessage({ type: "BG_CONNECT", code });
+        if (res && res.ok === false && res.error) {
+          tp?.showMiniToast?.(res.error, 2200);
+        }
+      } catch {
+        startSync(code, { userInitiated: true });
+      }
+      return;
+    }
+    if (action === "disconnect") {
+      try {
+        const res = await chrome.runtime.sendMessage({ type: "BG_DISCONNECT" });
+        if (res?.ok) return;
+      } catch {}
+      stopSync({ notifyBg: true });
+    }
+  }
+
   biliTouchPlayer =
     isBiliTouchDesktop && root.createBiliTouchPlayer
-      ? root.createBiliTouchPlayer({ adapter, engine, onNavigateVideo: navigateLocalVideo })
+      ? root.createBiliTouchPlayer({
+          adapter,
+          engine,
+          onNavigateVideo: navigateLocalVideo,
+          onToggleSync: handleTouchSyncToggle,
+        })
       : null;
   ytTouchPlayer =
     isYtTouchDesktop && root.createYtTouchPlayer
-      ? root.createYtTouchPlayer({ adapter, engine })
+      ? root.createYtTouchPlayer({
+          adapter,
+          engine,
+          onToggleSync: handleTouchSyncToggle,
+        })
       : null;
 
   const activeTouchPlayer = biliTouchPlayer || ytTouchPlayer;
@@ -1616,6 +1692,7 @@
     currentCode = nextCode;
     currentUiState = "waiting";
     waitingSinceAt = Date.now();
+    syncBiliTouchPlayer();
     saveTabSession({ code: currentCode });
     const clientId = await getOrCreateClientId();
     if (startingCode !== nextCode) return;
@@ -1749,6 +1826,7 @@
     hiddenAt = 0;
     lastReturnAt = 0;
     lastPeerState = null;
+    lastConflictInfo = null;
     startingCode = null;
     currentUiState = "idle";
     currentActiveCount = 1;
@@ -1897,7 +1975,7 @@
       return false;
     }
     if (msg?.type === "CS_CONFLICT_DECISION") {
-      wsClient.send({ type: "CONFLICT_DECISION", decision: msg.decision });
+      submitConflictDecision(msg.decision);
       sendResponse({ ok: true });
       return false;
     }

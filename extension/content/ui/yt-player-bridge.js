@@ -190,6 +190,134 @@
     return parseStoryboardSpec(spec, videoId);
   }
 
+  function extractTrackLabel(t) {
+    if (!t || typeof t !== "object") return "";
+    if (typeof t.displayName === "string" && t.displayName.trim()) return t.displayName.trim();
+    if (typeof t.name === "string" && t.name.trim()) return t.name.trim();
+    if (typeof t.name?.simpleText === "string" && t.name.simpleText.trim()) return t.name.simpleText.trim();
+    if (Array.isArray(t.name?.runs)) {
+      const joined = t.name.runs.map((r) => r?.text || "").join("").trim();
+      if (joined) return joined;
+    }
+    if (typeof t.languageName === "string" && t.languageName.trim()) return t.languageName.trim();
+    return String(t.languageCode || "").trim();
+  }
+
+  function getRawCaptionTracks(player, videoId) {
+    let list = null;
+    try {
+      const opt = player?.getOption?.("captions", "tracklist");
+      if (Array.isArray(opt) && opt.length > 0) list = opt;
+    } catch {}
+
+    if (!list) {
+      try {
+        const pr = player?.getPlayerResponse?.();
+        const tracks = pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+        if (Array.isArray(tracks) && tracks.length > 0) list = tracks;
+      } catch {}
+    }
+
+    if (!list) {
+      try {
+        const initResp = window.ytInitialPlayerResponse;
+        const initVid = String(initResp?.videoDetails?.videoId || "");
+        const tracks = initResp?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+        if (Array.isArray(tracks) && tracks.length > 0 && (!videoId || !initVid || initVid === videoId)) {
+          list = tracks;
+        }
+      } catch {}
+    }
+
+    return Array.isArray(list) ? list : [];
+  }
+
+  function readCaptionsState() {
+    const player = getMoviePlayer();
+    if (!player) {
+      return { available: false, on: false, activeLanguageCode: "", activeVssId: "", items: [] };
+    }
+    let searchVid = "";
+    try {
+      searchVid = new URLSearchParams(location?.search || "").get("v") || "";
+    } catch {}
+    const videoId = String(player?.getVideoData?.()?.video_id || searchVid || "");
+
+    const rawTracks = getRawCaptionTracks(player, videoId);
+    const seen = new Set();
+    const items = [];
+    rawTracks.forEach((t) => {
+      const languageCode = String(t?.languageCode || "").trim();
+      const vssId = String(t?.vssId || "").trim();
+      const key = vssId || languageCode;
+      if (!languageCode && !vssId) return;
+      if (seen.has(key)) return;
+      seen.add(key);
+      items.push({
+        languageCode,
+        vssId,
+        kind: String(t?.kind || "").trim(),
+        label: extractTrackLabel(t) || languageCode || vssId,
+      });
+    });
+
+    let activeTrack = null;
+    try {
+      const cur = player?.getOption?.("captions", "track");
+      if (cur && typeof cur === "object" && (cur.languageCode || cur.vssId)) {
+        activeTrack = cur;
+      }
+    } catch {}
+
+    const activeLanguageCode = String(activeTrack?.languageCode || "").trim();
+    const activeVssId = String(activeTrack?.vssId || "").trim();
+    return {
+      available: items.length > 0,
+      on: Boolean(activeLanguageCode || activeVssId),
+      activeLanguageCode,
+      activeVssId,
+      items,
+    };
+  }
+
+  function applyCaption(payload = {}) {
+    const player = getMoviePlayer();
+    if (!player) return readCaptionsState();
+
+    if (payload.off) {
+      try {
+        player.setOption?.("captions", "track", {});
+      } catch {}
+      try {
+        player.unloadModule?.("captions");
+      } catch {}
+      return readCaptionsState();
+    }
+
+    try {
+      player.loadModule?.("captions");
+    } catch {}
+
+    const st = readCaptionsState();
+    const reqVss = String(payload.vssId || "").trim();
+    const reqLang = String(payload.languageCode || "").trim();
+    const matched =
+      st.items.find((x) => (reqVss && x.vssId === reqVss) || (reqLang && x.languageCode === reqLang)) ||
+      st.items[0] ||
+      null;
+
+    if (matched) {
+      const trackObj = { languageCode: matched.languageCode };
+      if (matched.vssId) trackObj.vssId = matched.vssId;
+      if (matched.kind) trackObj.kind = matched.kind;
+      try {
+        player.setOption?.("captions", "track", trackObj);
+      } catch {}
+    }
+
+    return readCaptionsState();
+  }
+
   window.addEventListener("message", (e) => {
     if (e.source !== window) return;
     const data = e.data;
@@ -204,6 +332,10 @@
         state = applyQuality(data.quality);
       } else if (data.cmd === "get_storyboard") {
         state = readStoryboardState();
+      } else if (data.cmd === "get_captions") {
+        state = readCaptionsState();
+      } else if (data.cmd === "set_caption") {
+        state = applyCaption(data);
       } else {
         ok = false;
       }

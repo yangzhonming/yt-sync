@@ -2,6 +2,7 @@ node_modules/
 .wrangler/
 server/.wrangler/
 yt-sync-extension.zip
+extension.zip
 *.crx
 *.pem
 .DS_Store

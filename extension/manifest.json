@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube 同步看",
-  "version": "1.2.0",
+  "version": "1.3.5",
   "description": "双人异地同步看 YouTube & 哔哩哔哩：原画质无损直连，两端对等同步播放、暂停、进度、倍速与切集。",
   "permissions": ["tabs", "storage", "scripting"],
   "host_permissions": [
@@ -40,6 +40,12 @@
       "js": [
         "content/config.js",
         "content/debug/recorder.js",
+        "content/ui/touch/assets.js",
+        "content/ui/touch/theme.js",
+        "content/ui/touch/styles.js",
+        "content/ui/touch/fullscreen.js",
+        "content/ui/touch/gestures.js",
+        "content/ui/touch/core-shell.js",
         "content/ui/overlay.js",
         "content/ui/bili-touch-player.js",
         "content/ui/yt-touch-player.js",
