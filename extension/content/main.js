@@ -35,7 +35,13 @@
       typeof window.matchMedia === "function" &&
       window.matchMedia("(pointer: coarse)").matches
   );
+  const isYtTouchDesktop = Boolean(
+    (location.hostname === "www.youtube.com" || location.hostname === "m.youtube.com") &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches
+  );
   let biliTouchPlayer = null;
+  let ytTouchPlayer = null;
   let lastBiliSyncActive = false;
   let awayTime = null;
   let awayVideoId = null;
@@ -293,11 +299,12 @@
   }
 
   function syncBiliTouchPlayer() {
-    if (!biliTouchPlayer) return;
+    const tp = biliTouchPlayer || ytTouchPlayer;
+    if (!tp) return;
     const hasVideo = Boolean(adapter.getVideoId());
     if (!hasVideo) {
       lastBiliSyncActive = false;
-      biliTouchPlayer.disable();
+      tp.disable();
       return;
     }
     const isSyncActive =
@@ -305,13 +312,14 @@
       currentUiState === "synced" ||
       currentUiState === "solo" ||
       currentUiState === "reconnecting";
-    biliTouchPlayer.setActiveCount?.(currentActiveCount);
-    biliTouchPlayer.updateRate?.(engine?.getBaseRate?.() || 1);
-    if (!biliTouchPlayer.isActive?.()) {
-      biliTouchPlayer.enable({ startNative: false });
+    tp.setActiveCount?.(currentActiveCount);
+    tp.updateRate?.(engine?.getBaseRate?.() || 1);
+    if (!tp.isActive?.()) {
+      tp.enable({ startNative: false });
     } else if (isSyncActive && !lastBiliSyncActive) {
-      biliTouchPlayer.enterTouchMode?.();
+      tp.enterTouchMode?.();
     }
+    tp.refreshVideoContext?.();
     lastBiliSyncActive = isSyncActive;
   }
 
@@ -328,7 +336,7 @@
     if (patch.latencyMs !== undefined) currentLatencyMs = patch.latencyMs;
     if (patch.activeCount !== undefined) {
       currentActiveCount = patch.activeCount;
-      biliTouchPlayer?.setActiveCount?.(currentActiveCount);
+      (biliTouchPlayer || ytTouchPlayer)?.setActiveCount?.(currentActiveCount);
     }
     chrome.runtime
       .sendMessage({
@@ -1192,25 +1200,72 @@
       recorder.log("eng", ev, data);
     },
     onRateSynced(rate) {
-      biliTouchPlayer?.updateRate?.(rate);
+      (biliTouchPlayer || ytTouchPlayer)?.updateRate?.(rate);
     },
   });
 
+  function navigateLocalVideo(videoId, videoTitle = "") {
+    if (!videoId || adapter.getVideoId() === videoId) return;
+    if (wsClient.isConnected() && currentUiState === "synced" && !engine.isSoloMode()) {
+      suppressPagehideLeaveUntil = Date.now() + 5000;
+      expectedRemoteVideoId = null;
+      remoteNavRetryCount = 0;
+      adapter.cancelPendingNavigate?.();
+      lastPeerState = null;
+      clearAwayState({ persist: true, hideCard: true });
+      saveTabSession({
+        code: currentCode,
+        awayTime: null,
+        awayVideoId: null,
+        awayStartedAt: 0,
+        lastHeardVideoId: null,
+        lastHeardTime: null,
+        lastHeardAt: 0,
+        navFollowUntil: Date.now() + 15000,
+        navTargetVideoId: videoId,
+      });
+      engine.notifyVideoChanged();
+      engine.resetVersion();
+      wsClient.send({
+        type: "CONTROL",
+        action: "video_change",
+        videoId,
+        videoTitle,
+        currentTime: 0,
+        playbackRate: 1,
+        playing: false,
+      });
+      setTimeout(() => adapter.navigateTo(videoId), 80);
+      return;
+    }
+    adapter.navigateTo(videoId);
+  }
+
   biliTouchPlayer =
     isBiliTouchDesktop && root.createBiliTouchPlayer
-      ? root.createBiliTouchPlayer({ adapter, engine })
+      ? root.createBiliTouchPlayer({ adapter, engine, onNavigateVideo: navigateLocalVideo })
+      : null;
+  ytTouchPlayer =
+    isYtTouchDesktop && root.createYtTouchPlayer
+      ? root.createYtTouchPlayer({ adapter, engine })
       : null;
 
-  if (biliTouchPlayer) {
+  const activeTouchPlayer = biliTouchPlayer || ytTouchPlayer;
+  if (activeTouchPlayer) {
     syncBiliTouchPlayer();
     window.addEventListener("popstate", () => setTimeout(syncBiliTouchPlayer, 300));
     window.addEventListener("hashchange", () => setTimeout(syncBiliTouchPlayer, 300));
+    if (ytTouchPlayer) {
+      window.addEventListener("yt-navigate-finish", () => setTimeout(syncBiliTouchPlayer, 300));
+    }
     let lastTouchVid = adapter.getVideoId();
     setInterval(() => {
       const nextVid = adapter.getVideoId();
       if (nextVid !== lastTouchVid) {
         lastTouchVid = nextVid;
         syncBiliTouchPlayer();
+      } else if (activeTouchPlayer.isActive?.()) {
+        activeTouchPlayer.ensureAlive?.();
       }
     }, 900);
   }

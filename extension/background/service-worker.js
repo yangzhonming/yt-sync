@@ -10,6 +10,7 @@ const CONTENT_FILES = [
   "content/debug/recorder.js",
   "content/ui/overlay.js",
   "content/ui/bili-touch-player.js",
+  "content/ui/yt-touch-player.js",
   "content/adapters/youtube.js",
   "content/adapters/bilibili.js",
   "content/transport/ws-client.js",
@@ -98,6 +99,16 @@ async function sendToTabWithFallback(tabId, message) {
   try {
     return await chrome.tabs.sendMessage(tabId, message);
   } catch {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (/^https:\/\/(www|m)\.youtube\.com\//i.test(tab?.url || "")) {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: ["content/ui/yt-player-bridge.js"],
+          world: "MAIN",
+        });
+      }
+    } catch {}
     await chrome.scripting.executeScript({
       target: { tabId },
       files: CONTENT_FILES,

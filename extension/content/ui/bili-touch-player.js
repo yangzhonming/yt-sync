@@ -1,13 +1,19 @@
 (() => {
   const root = (window.YTSync = window.YTSync || {});
 
-  const RATE_OPTIONS = [2.0, 1.5, 1.25, 1.0, 0.75];
+  const RATE_OPTIONS = [2.0, 1.5, 1.25, 1.0, 0.75, 0.5];
   const HUD_QUICK_HIDE_MS = 1000;
-  const HUD_BAR_HIDE_MS = 2800;
+  const HUD_BAR_HIDE_MS = 2000;
   const RETURN_PILL_HIDE_MS = 2400;
+  const LOCK_AWAKE_MS = 1400;
+  const BOOST_LOCKED_FADE_MS = 2500;
   const VIDEOSHOT_RETRY_COOLDOWN_MS = 15000;
   const MAX_DECODED_SHEETS = 4;
   const LONG_PRESS_MS = 350;
+  const SINGLE_TAP_DELAY_MS = 240;
+  const DOUBLE_TAP_MS = 250;
+  const DOUBLE_TAP_DIST_PX = 36;
+  const BOOST_LOCK_SLIDE_PX = 48;
   const DRAG_THRESHOLD_PX = 14;
   const TAP_MOVE_LIMIT_PX = 10;
   const MINI_TOAST_MS = 900;
@@ -18,11 +24,19 @@
   const HOST_ID = "yt-sync-bili-touch-host";
   const STYLE_ID = "yt-sync-bili-touch-style";
   const ACTIVE_HTML_CLASS = "yt-sync-bili-touch-active";
+  const NATIVE_HTML_CLASS = "yt-sync-bili-native-mode";
+  const CUSTOM_THUMB_DATA_URI =
+    "data:image/png;base64,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";
 
+  // Authentic SVG icons reused from Bilibili Web player (.bpx-player-ctrl-* & .bui-danmaku-switch-*)
   const PLAY_SVG =
-    '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.14v14l11-7-11-7z"/></svg>';
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 28" fill="currentColor" aria-hidden="true"><g transform="translate(14.6 14)"><path d="M-7.031-10.875c0 0-1.297-.375-2.391.406-.688.562-.578 2.477-.578 2.477V8.016s-.125 2.226 1 2.976c1.125.75 4-.961 4-.961L7.969 1.875S9 1.062 9 0s-1.031-1.938-1.031-1.938L-7.031-10.875z"/></g></svg>';
   const PAUSE_SVG =
-    '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6V5zm8 0h4v14h-4V5z"/></svg>';
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 28" fill="currentColor" aria-hidden="true"><g transform="translate(14 14)"><path d="M-5.484-10C-7.953-10-8-7.984-8-7.984l-.008 15.968S-7.984 9.992-5.5 9.992c2.484 0 2.496-1.996 2.496-1.996L-2.984-8S-3.015-10-5.484-10z"/></g><g transform="translate(24.812 14)"><path d="M-5.484-10C-7.953-10-8-7.984-8-7.984l-.008 15.968S-7.984 9.992-5.5 9.992c2.484 0 2.496-1.996 2.496-1.996L-2.984-8S-3.015-10-5.484-10z"/></g></svg>';
+  const NEXT_SVG =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22" fill="currentColor" aria-hidden="true"><path d="M16 5a1 1 0 0 0-1 1v4.615a1.431 1.431 0 0 0-.615-.829L7.21 5.23A1.439 1.439 0 0 0 5 6.445v9.11a1.44 1.44 0 0 0 2.21 1.215l7.175-4.555a1.436 1.436 0 0 0 .616-.828V16a1 1 0 0 0 2 0V6c0-.552-.448-1-1-1z"/></svg>';
+  const PREV_SVG =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22" fill="currentColor" aria-hidden="true"><g transform="translate(22 0) scale(-1 1)"><path d="M16 5a1 1 0 0 0-1 1v4.615a1.431 1.431 0 0 0-.615-.829L7.21 5.23A1.439 1.439 0 0 0 5 6.445v9.11a1.44 1.44 0 0 0 2.21 1.215l7.175-4.555a1.436 1.436 0 0 0 .616-.828V16a1 1 0 0 0 2 0V6c0-.552-.448-1-1-1z"/></g></svg>';
   const BACK_SVG =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>';
   const FULL_ENTER_SVG =
@@ -30,13 +44,32 @@
   const FULL_EXIT_SVG =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>';
   const VOL_ON_SVG =
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M18.36 5.64a9 9 0 0 1 0 12.73"/></svg>';
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 88" fill="currentColor" aria-hidden="true"><g transform="translate(44 44)"><path d="M-.44-25.096c.29.36.44.8.44 1.25v47.68c0 1.1-.9 2-2 2-.45 0-.89-.16-1.25-.44l-16.75-13.4h-4c-4.42 0-8-3.58-8-8v-8c0-4.42 3.58-8 8-8h4l16.75-13.4c.86-.69 2.12-.55 2.81.31zM13.778-28.896C24.818-23.616 31.998-12.456 31.998-.006c0 12.46-7.19 23.63-18.25 28.9-1.99.95-4.38.11-5.33-1.89-.95-1.99-.1-4.38 1.89-5.33 8.3-3.95 13.69-12.33 13.69-21.68 0-9.34-5.38-17.71-13.66-21.67-2-.95-2.84-3.34-1.89-5.33.95-2 3.34-2.84 5.33-1.89zM8-13.866c4.78 2.77 8 7.94 8 13.86s-3.22 11.09-8 13.86v-27.72z"/></g></svg>';
   const VOL_MUTE_SVG =
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><line x1="22" y1="9" x2="16" y2="15" stroke="#fb7299"/><line x1="16" y1="9" x2="22" y2="15" stroke="#fb7299"/></svg>';
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 88" fill="currentColor" aria-hidden="true"><g transform="translate(44 44)"><path d="M-.44-25.096c.29.36.44.8.44 1.25v47.68c0 1.1-.9 2-2 2-.45 0-.89-.16-1.25-.44l-16.75-13.4h-4c-4.42 0-8-3.58-8-8v-8c0-4.42 3.58-8 8-8h4l16.75-13.4c.86-.69 2.12-.55 2.81.31z" opacity="0.72"/><path d="M-33.94-28.28a4 4 0 0 1 5.66-5.66l62.22 62.22a4 4 0 0 1-5.66 5.66L-33.94-28.28z" fill="#fb7299"/></g></svg>';
   const DM_ON_SVG =
-    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 4l3 2.5L15 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="6.5" width="18" height="13" rx="3" stroke="currentColor" stroke-width="1.8"/><text x="12" y="15.5" text-anchor="middle" fill="currentColor" font-size="8.5" font-weight="700" font-family="sans-serif">弹</text><circle cx="19" cy="17.5" r="4" fill="#fb7299"/><path d="M17.2 17.5l1.2 1.2 2.3-2.3" stroke="#fff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M11.989 4.828c-.47 0-.975.004-1.515.012l-1.71-2.566a1.008 1.008 0 0 0-1.678 1.118l.999 1.5c-.681.018-1.403.04-2.164.068a4.013 4.013 0 0 0-3.83 3.44c-.165 1.15-.245 2.545-.245 4.185 0 1.965.115 3.67.35 5.116a4.012 4.012 0 0 0 3.763 3.363l.906.046c1.205.063 1.808.095 3.607.095a.988.988 0 0 0 0-1.975c-1.758 0-2.339-.03-3.501-.092l-.915-.047a2.037 2.037 0 0 1-1.91-1.708c-.216-1.324-.325-2.924-.325-4.798 0-1.563.076-2.864.225-3.904.14-.977.96-1.713 1.945-1.747 2.444-.087 4.465-.13 6.063-.131 1.598 0 3.62.044 6.064.13.96.034 1.71.81 1.855 1.814.075.524.113 1.962.141 3.065v.002c.01.342.017.65.025.88a.987.987 0 1 0 1.974-.068c-.008-.226-.016-.523-.025-.856v-.027c-.03-1.118-.073-2.663-.16-3.276-.273-1.906-1.783-3.438-3.74-3.507-.9-.032-1.743-.058-2.531-.078l1.05-1.46a1.008 1.008 0 0 0-1.638-1.177l-1.862 2.59c-.38-.004-.744-.007-1.088-.007h-.13Zm.521 4.775h-1.32v4.631h2.222v.847h-2.618v1.078h2.618l.003.678c.36.026.714.163 1.01.407h.11v-1.085h2.694v-1.078h-2.695v-.847H16.8v-4.63h-1.276a8.59 8.59 0 0 0 .748-1.42L15.183 7.8a14.232 14.232 0 0 1-.814 1.804h-1.518l.693-.308a8.862 8.862 0 0 0-.814-1.408l-1.045.352c.297.396.572.847.825 1.364Zm-4.18 3.564.154-1.485h1.98V8.294h-3.2v.98H9.33v1.43H7.472l-.308 3.453h2.277c0 1.166-.044 1.925-.12 2.277-.078.352-.386.528-.936.528-.308 0-.616-.022-.902-.055l.297 1.067.062.005c.285.02.551.04.818.04 1.001-.067 1.562-.419 1.694-1.057.11-.638.176-1.903.176-3.795h-2.2Zm7.458.11v-.858h-1.254v.858h1.254Zm-2.376-.858v.858h-1.199v-.858h1.2Zm-1.199-.946h1.2v-.902h-1.2v.902Zm2.321 0v-.902h1.254v.902h-1.254Z"/><path fill="#fb7299" fill-rule="evenodd" clip-rule="evenodd" d="M22.846 14.627a1 1 0 0 0-1.412.075l-5.091 5.703-2.216-2.275-.097-.086-.008-.005a1 1 0 0 0-1.322 1.493l2.963 3.041.093.083.007.005c.407.315 1 .27 1.354-.124l5.81-6.505.08-.102.005-.008a1 1 0 0 0-.166-1.295Z"/></svg>';
   const DM_OFF_SVG =
-    '<svg viewBox="0 0 24 24" fill="none" opacity="0.62" aria-hidden="true"><path d="M9 4l3 2.5L15 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="6.5" width="18" height="13" rx="3" stroke="currentColor" stroke-width="1.8"/><text x="12" y="15.5" text-anchor="middle" fill="currentColor" font-size="8.5" font-weight="700" font-family="sans-serif">弹</text><line x1="4" y1="19" x2="20" y2="7" stroke="#ffffff" stroke-width="1.9" stroke-linecap="round"/></svg>';
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" opacity="0.72" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="m8.085 4.891-.999-1.499a1.008 1.008 0 0 1 1.679-1.118l1.709 2.566c.54-.008 1.045-.012 1.515-.012h.13c.345 0 .707.003 1.088.007l1.862-2.59a1.008 1.008 0 0 1 1.637 1.177l-1.049 1.46c.788.02 1.631.046 2.53.078 1.958.069 3.468 1.6 3.74 3.507.088.613.13 2.158.16 3.276l.001.027c.01.333.017.63.025.856a.987.987 0 0 1-1.974.069c-.008-.23-.016-.539-.025-.881v-.002c-.028-1.103-.066-2.541-.142-3.065-.143-1.004-.895-1.78-1.854-1.813-2.444-.087-4.466-.13-6.064-.131-1.598 0-3.619.044-6.063.13a2.037 2.037 0 0 0-1.945 1.748c-.15 1.04-.225 2.341-.225 3.904 0 1.874.11 3.474.325 4.798.154.949.95 1.66 1.91 1.708a97.58 97.58 0 0 0 5.416.139.988.988 0 0 1 0 1.975c-2.196 0-3.61-.047-5.513-.141A4.012 4.012 0 0 1 2.197 17.7c-.236-1.446-.351-3.151-.351-5.116 0-1.64.08-3.035.245-4.184A4.013 4.013 0 0 1 5.92 4.96c.761-.027 1.483-.05 2.164-.069Zm4.436 4.707h-1.32v4.63h2.222v.848h-2.618v1.078h2.431a5.01 5.01 0 0 1 3.575-3.115V9.598h-1.276a8.59 8.59 0 0 0 .748-1.42l-1.089-.384a14.232 14.232 0 0 1-.814 1.804h-1.518l.693-.308a8.862 8.862 0 0 0-.814-1.408l-1.045.352c.297.396.572.847.825 1.364Zm-4.18 3.564.154-1.485h1.98V8.289h-3.2v.979h2.067v1.43H7.483l-.308 3.454h2.277c0 1.166-.044 1.925-.12 2.277-.078.352-.386.528-.936.528-.308 0-.616-.022-.902-.055l.297 1.067.062.004c.285.02.551.04.818.04 1.001-.066 1.562-.418 1.694-1.056.11-.638.176-1.903.176-3.795h-2.2Zm7.458.11v-.858h-1.254v.858H15.8Zm-2.376-.858v.858h-1.199v-.858h1.2Zm-1.199-.946h1.2v-.902h-1.2v.902Zm2.321 0v-.902H15.8v.902h-1.254Zm3.517 10.594a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-.002-1.502a2.5 2.5 0 0 1-2.217-3.657l3.326 3.398a2.49 2.49 0 0 1-1.109.259Zm2.5-2.5c0 .42-.103.815-.286 1.162l-3.328-3.401a2.5 2.5 0 0 1 3.614 2.239Z"/></svg>';
+  const LOCK_CLOSED_SVG =
+    '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18 8h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zm-6 9a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm3.1-9H8.9V6a3.1 3.1 0 0 1 6.2 0v2z"/></svg>';
+  const LOCK_OPEN_SVG =
+    '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18 8h-1V6a5 5 0 0 0-9.9-1h2.06A3.01 3.01 0 0 1 15 6v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zm-6 9a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg>';
+
+  function normalizeThumbUrl(raw, suffix = "@160w_100h_1c.webp") {
+    const s = String(raw || "").trim();
+    if (!s) return "";
+    const httpsUrl = s.startsWith("//")
+      ? `https:${s}`
+      : s.startsWith("http://")
+        ? `https://${s.slice(7)}`
+        : s;
+    if (!httpsUrl.startsWith("https://")) return "";
+    if (suffix && httpsUrl.includes("hdslb.com") && !httpsUrl.includes("@")) {
+      return `${httpsUrl}${suffix}`;
+    }
+    return httpsUrl;
+  }
 
   function formatTime(sec) {
     const total = Math.max(0, Math.floor(Number(sec) || 0));
@@ -59,12 +92,24 @@
     return `${Number.isInteger(r * 10) ? r.toFixed(1) : r}x`;
   }
 
-  function isFullscreenNow() {
+  function getBpxScreenMode() {
+    return document.querySelector?.(".bpx-player-container")?.getAttribute?.("data-screen") || "";
+  }
+
+  function isSystemFullscreenNow() {
     return Boolean(
       document.fullscreenElement ||
         document.webkitFullscreenElement ||
-        document.querySelector?.(".bpx-player-container")?.getAttribute?.("data-screen") === "full"
+        getBpxScreenMode() === "full"
     );
+  }
+
+  function isWebFullscreenNow() {
+    return getBpxScreenMode() === "web";
+  }
+
+  function isFullscreenNow() {
+    return isSystemFullscreenNow() || isWebFullscreenNow();
   }
 
   function findPlayerContainer(video) {
@@ -88,6 +133,10 @@
 
   function findNativeFullscreenButton() {
     return document.querySelector(".bpx-player-ctrl-full, .bpx-player-ctrl-btn.bpx-player-ctrl-full");
+  }
+
+  function findNativeWebFullscreenButton() {
+    return document.querySelector(".bpx-player-ctrl-web, .bpx-player-ctrl-btn.bpx-player-ctrl-web");
   }
 
   function parseBiliVideoRef() {
@@ -267,12 +316,18 @@
     };
   }
 
-  function createBiliTouchPlayer({ adapter, engine } = {}) {
+  function createBiliTouchPlayer({ adapter, engine, onNavigateVideo } = {}) {
     let enabled = false;
     let nativeBarMode = false;
+    let hadSystemFullscreen = false;
     let hudVisible = false;
     let speedDrawerOpen = false;
-    let volumePopoverOpen = false;
+    let qualityDrawerOpen = false;
+    let episodeDrawerOpen = false;
+    let screenLocked = false;
+    let lockAwake = false;
+    let speedLockedByBoost = false;
+    let speedLockRestoreRate = 1;
     let endingPassthrough = false;
     let dmFallbackEnabled = true;
     let userMuted = false;
@@ -288,28 +343,30 @@
 
     let hudTimer = null;
     let returnPillTimer = null;
+    let lockAwakeTimer = null;
+    let boostLockedFadeTimer = null;
     let gestureHudTimer = null;
     let scrubPreviewTimer = null;
     let videoshotPreloadTimer = null;
+    let qualitySyncTimer = null;
     let miniToastTimer = null;
     let playFlashTimer = null;
     let longPressTimer = null;
+    let singleTapTimer = null;
     let mountRetryTimer = null;
 
     let allowNativeClickDepth = 0;
 
     let draggingSeek = false;
-    let draggingVolume = false;
     let seekPreviewTime = 0;
     let activeScrubPointerId = null;
     let activeScrubWrap = null;
     let activeScrubStartSec = 0;
-    let activeVolPointerId = null;
     let activeScrubContext = null;
     let lastVideoPaused = null;
 
     let activePointerId = null;
-    let gestureMode = "idle"; // idle | pending | seek | volume | boost | scroll_yield
+    let gestureMode = "idle"; // idle | pending | seek | volume | boost | scroll_yield | locked_block
     let gestureStartX = 0;
     let gestureStartY = 0;
     let gestureStartAt = 0;
@@ -318,6 +375,17 @@
     let gestureStartVol = 1;
     let gesturePendingSeekSec = 0;
     let preBoostRate = 1;
+    let boostLockArmed = false;
+    let lastTapAt = 0;
+    let lastTapX = 0;
+    let lastTapY = 0;
+
+    let currentEpisodeData = null;
+    let lastEpisodeRefKey = "";
+    let lastEpisodeRenderKey = "";
+    let lastActiveEpBtn = null;
+    const episodeCache = new Map();
+    const episodePending = new Map();
 
     const videoshotCache = new Map();
     const videoshotPending = new Map();
@@ -334,12 +402,11 @@
     let globalEventsBound = false;
     let boostGlobalBound = false;
     let scrubWindowBound = false;
-    let volWindowBound = false;
     let unbindScrubWindowEvents = () => {};
-    let unbindVolWindowEvents = () => {};
     let containerShieldEl = null;
     let outerShieldEl = null;
     let resizeObserver = null;
+    let screenObserver = null;
 
     function ensureGlobalStyle() {
       if (document.getElementById(STYLE_ID)) return;
@@ -379,6 +446,11 @@
           visibility: hidden !important;
           pointer-events: none !important;
         }
+        html.${NATIVE_HTML_CLASS} .bpx-player-top-right,
+        html.${NATIVE_HTML_CLASS} .bpx-player-top-wrap {
+          padding-right: 78px !important;
+          box-sizing: border-box !important;
+        }
       `;
       (document.head || document.documentElement).appendChild(style);
     }
@@ -386,12 +458,11 @@
     function syncHtmlClass() {
       const rootEl = document.documentElement;
       if (!rootEl) return;
-      if (enabled && !nativeBarMode) {
+      if (enabled) {
         ensureGlobalStyle();
-        rootEl.classList.add(ACTIVE_HTML_CLASS);
-      } else {
-        rootEl.classList.remove(ACTIVE_HTML_CLASS);
       }
+      rootEl.classList.toggle(ACTIVE_HTML_CLASS, Boolean(enabled && !nativeBarMode));
+      rootEl.classList.toggle(NATIVE_HTML_CLASS, Boolean(enabled && nativeBarMode));
     }
 
     function clearTimers() {
@@ -399,18 +470,27 @@
       hudTimer = null;
       clearTimeout(returnPillTimer);
       returnPillTimer = null;
+      clearTimeout(lockAwakeTimer);
+      lockAwakeTimer = null;
+      clearTimeout(boostLockedFadeTimer);
+      boostLockedFadeTimer = null;
       clearTimeout(gestureHudTimer);
       gestureHudTimer = null;
       clearTimeout(scrubPreviewTimer);
       scrubPreviewTimer = null;
       clearTimeout(videoshotPreloadTimer);
       videoshotPreloadTimer = null;
+      clearTimeout(qualitySyncTimer);
+      qualitySyncTimer = null;
       clearTimeout(miniToastTimer);
       miniToastTimer = null;
       clearTimeout(playFlashTimer);
       playFlashTimer = null;
       clearTimeout(longPressTimer);
       longPressTimer = null;
+      clearTimeout(singleTapTimer);
+      singleTapTimer = null;
+      lastTapAt = 0;
       clearTimeout(mountRetryTimer);
       mountRetryTimer = null;
       multiSheetTimers.forEach((t) => clearTimeout(t));
@@ -467,21 +547,58 @@
 
     function onFullscreenChange() {
       if (!enabled) return;
-      ensureMounted();
+      const sysFull = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+      if (sysFull) {
+        hadSystemFullscreen = true;
+      } else if (hadSystemFullscreen) {
+        hadSystemFullscreen = false;
+        if (isWebFullscreenNow()) {
+          const webBtn = findNativeWebFullscreenButton();
+          if (webBtn && typeof webBtn.click === "function") {
+            runNativeClick(webBtn);
+          }
+        }
+      }
+      if (!isFullscreenNow() && screenLocked) {
+        setScreenLocked(false, { silent: true });
+      }
+      if (!host || !host.isConnected) {
+        ensureAlive();
+      }
       syncScale();
       syncTopBar();
       syncPlaybackUi();
-      if (volumePopoverOpen) positionVolumePopover();
+      syncQualityUi();
+      if (speedDrawerOpen) positionSpeedPopover();
+      if (qualityDrawerOpen) positionQualityPopover();
     }
 
     function onWindowResize() {
       if (!enabled) return;
       syncScale();
-      if (volumePopoverOpen) positionVolumePopover();
+      if (speedDrawerOpen) positionSpeedPopover();
+      if (qualityDrawerOpen) positionQualityPopover();
+    }
+
+    function clearLockedBoostSpeed({ restore = false } = {}) {
+      clearTimeout(boostLockedFadeTimer);
+      boostLockedFadeTimer = null;
+      const wasLockedSpeed = speedLockedByBoost;
+      speedLockedByBoost = false;
+      els.boostChip?.classList.remove("is-visible", "is-lock-armed", "is-locked-speed", "is-locked-compact");
+      if (els.boostText) els.boostText.textContent = "2.0x 倍速播放中";
+      if (els.boostHint) els.boostHint.textContent = "上滑锁定";
+      if (restore && wasLockedSpeed) {
+        const nextRate = Number.isFinite(speedLockRestoreRate) ? speedLockRestoreRate : 1;
+        baseRate = nextRate;
+        engine?.setPlaybackRate?.(nextRate, { showToast: true });
+        syncRateUi();
+        showMiniToast(`已恢复 ${formatOptionText(nextRate)}`, MINI_TOAST_MS);
+      }
     }
 
     function onBoostDocVisChange() {
-      if (document.hidden) releaseBoost();
+      if (document.hidden) releaseBoost({ cancelLock: true });
     }
 
     function bindBoostGlobalRelease() {
@@ -506,18 +623,54 @@
       document.removeEventListener("visibilitychange", onBoostDocVisChange);
     }
 
-    function releaseBoost() {
+    function releaseBoost(opts) {
       clearTimeout(longPressTimer);
       longPressTimer = null;
       unbindBoostGlobalRelease();
       const wasBoost = gestureMode === "boost";
+      const armed = boostLockArmed;
+      boostLockArmed = false;
       gestureMode = "idle";
       activePointerId = null;
-      els.boostChip?.classList.remove("is-visible");
+      els.boostChip?.classList.remove("is-lock-armed");
       if (wasBoost) {
-        const restore = Number.isFinite(preBoostRate) ? preBoostRate : 1;
-        engine?.setPlaybackRate?.(restore, { showToast: false });
-        syncRateUi();
+        const cancelLock =
+          Boolean(opts?.cancelLock) ||
+          opts?.type === "blur" ||
+          opts?.type === "pointercancel" ||
+          opts?.type === "touchcancel" ||
+          opts?.type === "visibilitychange";
+        if (armed && !cancelLock) {
+          speedLockRestoreRate = Number.isFinite(preBoostRate) ? preBoostRate : 1;
+          speedLockedByBoost = true;
+          baseRate = 2.0;
+          engine?.setPlaybackRate?.(2.0, { showToast: true });
+          syncRateUi();
+          clearTimeout(boostLockedFadeTimer);
+          els.boostChip?.classList.remove("is-locked-compact");
+          els.boostChip?.classList.add("is-visible", "is-locked-speed");
+          if (els.boostText) els.boostText.textContent = "2.0x 已锁定";
+          if (els.boostHint) els.boostHint.textContent = "点此恢复";
+          boostLockedFadeTimer = setTimeout(() => {
+            boostLockedFadeTimer = null;
+            if (!enabled || !speedLockedByBoost) return;
+            els.boostChip?.classList.add("is-locked-compact");
+            if (els.boostText) els.boostText.textContent = "2.0x";
+            if (els.boostHint) els.boostHint.textContent = "×";
+          }, BOOST_LOCKED_FADE_MS);
+        } else {
+          speedLockedByBoost = false;
+          els.boostChip?.classList.remove("is-visible", "is-locked-speed", "is-locked-compact");
+          if (els.boostText) els.boostText.textContent = "2.0x 倍速播放中";
+          if (els.boostHint) els.boostHint.textContent = "上滑锁定";
+          const restore = Number.isFinite(preBoostRate) ? preBoostRate : 1;
+          engine?.setPlaybackRate?.(restore, { showToast: false });
+          syncRateUi();
+        }
+      } else if (!speedLockedByBoost) {
+        els.boostChip?.classList.remove("is-visible", "is-locked-speed", "is-locked-compact");
+        if (els.boostText) els.boostText.textContent = "2.0x 倍速播放中";
+        if (els.boostHint) els.boostHint.textContent = "上滑锁定";
       }
     }
 
@@ -543,17 +696,40 @@
 
     function bindContainerObserver(container) {
       unbindContainerObserver();
-      if (!container || typeof ResizeObserver !== "function") return;
-      resizeObserver = new ResizeObserver(() => {
-        if (enabled) syncScale();
-      });
-      resizeObserver.observe(container);
+      if (container && typeof ResizeObserver === "function") {
+        resizeObserver = new ResizeObserver(() => {
+          if (enabled) syncScale();
+        });
+        resizeObserver.observe(container);
+      }
+      const bpxContainer =
+        container?.closest?.(".bpx-player-container") ||
+        document.querySelector?.(".bpx-player-container") ||
+        null;
+      if (bpxContainer && typeof MutationObserver === "function") {
+        let lastScreen = bpxContainer.getAttribute?.("data-screen") || "";
+        screenObserver = new MutationObserver(() => {
+          const nextScreen = bpxContainer.getAttribute?.("data-screen") || "";
+          if (nextScreen !== lastScreen) {
+            lastScreen = nextScreen;
+            onFullscreenChange();
+          }
+        });
+        screenObserver.observe(bpxContainer, {
+          attributes: true,
+          attributeFilter: ["data-screen"],
+        });
+      }
     }
 
     function unbindContainerObserver() {
       if (resizeObserver) {
         resizeObserver.disconnect();
         resizeObserver = null;
+      }
+      if (screenObserver) {
+        screenObserver.disconnect();
+        screenObserver = null;
       }
     }
 
@@ -602,6 +778,7 @@
       syncPlaybackUi();
       syncVolumeUi();
       scheduleVideoshotPreload(1200);
+      refreshVideoContext();
     }
 
     function onVideoPlayStateChange() {
@@ -712,7 +889,54 @@
       showMiniToast(dmFallbackEnabled ? "弹幕已开" : "弹幕已关", MINI_TOAST_MS);
     }
 
+    function requestDocFullscreenWithOrientation() {
+      try {
+        const rootEl = document.documentElement;
+        (rootEl?.requestFullscreen || rootEl?.webkitRequestFullscreen)?.call(rootEl)?.catch?.(() => {});
+      } catch {}
+      try {
+        screen?.orientation?.lock?.("landscape")?.catch?.(() => {});
+      } catch {}
+    }
+
+    function exitDocFullscreenWithOrientation() {
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        try {
+          (document.exitFullscreen || document.webkitExitFullscreen)?.call(document)?.catch?.(() => {});
+        } catch {}
+      }
+      try {
+        screen?.orientation?.unlock?.();
+      } catch {}
+    }
+
     function toggleFullscreen() {
+      if (isWebFullscreenNow()) {
+        const webBtn = findNativeWebFullscreenButton();
+        if (webBtn && typeof webBtn.click === "function") {
+          runNativeClick(webBtn);
+        }
+        exitDocFullscreenWithOrientation();
+        Promise.resolve().then(() => onFullscreenChange());
+        return;
+      }
+      if (isSystemFullscreenNow()) {
+        const fullBtn = findNativeFullscreenButton();
+        if (fullBtn && typeof fullBtn.click === "function") {
+          runNativeClick(fullBtn);
+          exitDocFullscreenWithOrientation();
+          return;
+        }
+        toggleDomFullscreenFallback(true);
+        return;
+      }
+      const webBtn = findNativeWebFullscreenButton();
+      if (webBtn && typeof webBtn.click === "function") {
+        runNativeClick(webBtn);
+        requestDocFullscreenWithOrientation();
+        Promise.resolve().then(() => onFullscreenChange());
+        return;
+      }
       const fullBtn = findNativeFullscreenButton();
       if (fullBtn && typeof fullBtn.click === "function") {
         runNativeClick(fullBtn);
@@ -764,6 +988,163 @@
           const opt = Number(btn.dataset.rate);
           btn.classList.toggle("is-active", Math.abs(opt - rate) < 0.02);
         });
+      }
+    }
+
+    function formatQualityShortLabel(raw) {
+      const s = String(raw || "").replace(/\s+/g, " ").trim();
+      if (!s) return "画质";
+      if (/8K/i.test(s)) return "8K";
+      if (/4K/i.test(s)) return "4K";
+      if (/杜比/i.test(s)) return "杜比";
+      if (/HDR/i.test(s)) return "HDR";
+      if (/1080P.*60/i.test(s)) return "1080P60";
+      if (/1080P.*高码|1080P\+/i.test(s)) return "1080P+";
+      if (/1080P/i.test(s)) return "1080P";
+      if (/720P.*60/i.test(s)) return "720P60";
+      if (/720P/i.test(s)) return "720P";
+      if (/480P/i.test(s)) return "480P";
+      if (/360P/i.test(s)) return "360P";
+      if (/自动/i.test(s)) return "自动";
+      const token = s.split(/\s+/)[0] || s;
+      return token.slice(0, 6) || "画质";
+    }
+
+    function readNativeQualityState({ wakeMenu = false } = {}) {
+      if (typeof document?.querySelector !== "function") {
+        return { available: false, currentLabel: "", shortLabel: "画质", items: [] };
+      }
+      const ctrl = document.querySelector(".bpx-player-ctrl-quality");
+      const resultEl = document.querySelector(".bpx-player-ctrl-quality-result");
+      let itemEls = Array.from(document.querySelectorAll?.(".bpx-player-ctrl-quality-menu-item") || []);
+      if (wakeMenu && itemEls.length === 0 && ctrl && typeof ctrl.dispatchEvent === "function") {
+        try {
+          const EvCtor = typeof MouseEvent === "function" ? MouseEvent : Event;
+          ctrl.dispatchEvent(new EvCtor("mouseenter", { bubbles: true }));
+        } catch {}
+        itemEls = Array.from(document.querySelectorAll?.(".bpx-player-ctrl-quality-menu-item") || []);
+      }
+
+      const items = itemEls
+        .map((el) => {
+          const badgeEl = el.querySelector?.(
+            ".bpx-player-ctrl-quality-badge, .bpx-player-ctrl-quality-badge-bigvip, .bpx-player-ctrl-quality-badge-login"
+          );
+          const badge = (badgeEl?.textContent || "").trim();
+          const textEl = el.querySelector?.(".bpx-player-ctrl-quality-text");
+          let rawText = (textEl?.textContent || el.textContent || "").replace(/\s+/g, " ").trim();
+          if (!textEl && badge && rawText.endsWith(badge)) {
+            rawText = rawText.slice(0, rawText.length - badge.length).trim();
+          } else if (!textEl && badge && rawText.startsWith(badge)) {
+            rawText = rawText.slice(badge.length).trim();
+          }
+          const isActive = Boolean(el.classList?.contains("bpx-state-active"));
+          const value = el.getAttribute?.("data-value") || "";
+          return {
+            el,
+            rawText: rawText || "画质",
+            shortLabel: formatQualityShortLabel(rawText),
+            badge,
+            isActive,
+            value,
+          };
+        })
+        .filter((x) => x.rawText);
+
+      const activeItem = items.find((x) => x.isActive) || null;
+      const rawResult = (resultEl?.textContent || "").replace(/\s+/g, " ").trim();
+      const currentLabel = rawResult || activeItem?.rawText || "";
+      return {
+        available: Boolean(ctrl || items.length > 0),
+        currentLabel,
+        shortLabel: formatQualityShortLabel(currentLabel),
+        items,
+      };
+    }
+
+    function syncQualityUi() {
+      const state = readNativeQualityState({ wakeMenu: false });
+      [els.qualityBtn, els.winQualityBtn].forEach((btn) => {
+        if (!btn) return;
+        btn.classList.toggle("is-hidden", !state.available);
+        btn.textContent = state.shortLabel || "画质";
+      });
+    }
+
+    function positionQualityPopover() {
+      if (!els.qualityDrawer) return;
+      const btn = isFullscreenNow() ? els.qualityBtn : els.winQualityBtn;
+      const rootRect = els.root?.getBoundingClientRect?.();
+      const btnRect = btn?.getBoundingClientRect?.();
+      const scale = Number(host?.style?.getPropertyValue?.("--ytb-s")) || 1;
+      if (rootRect && rootRect.width > 0 && btnRect && btnRect.width > 0) {
+        const centerX = btnRect.left - rootRect.left + btnRect.width / 2;
+        const halfW = 62 * scale;
+        const clampedX = Math.max(halfW + 8, Math.min(rootRect.width - halfW - 8, centerX));
+        els.qualityDrawer.style.left = `${clampedX}px`;
+      } else {
+        els.qualityDrawer.style.left = "";
+      }
+    }
+
+    function renderQualityDrawer() {
+      if (!els.qualityDrawer) return;
+      const state = readNativeQualityState({ wakeMenu: true });
+      els.qualityDrawer.textContent = "";
+      if (!state.items.length) {
+        const empty = document.createElement("div");
+        empty.className = "ytb-quality-opt is-empty";
+        empty.textContent = "暂无可选画质";
+        els.qualityDrawer.appendChild(empty);
+        return;
+      }
+      state.items.forEach((item) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = `ytb-quality-opt${item.isActive ? " is-active" : ""}`;
+        const labelSpan = document.createElement("span");
+        labelSpan.className = "ytb-quality-label";
+        labelSpan.textContent = item.rawText;
+        btn.appendChild(labelSpan);
+        if (item.badge) {
+          const badgeSpan = document.createElement("span");
+          badgeSpan.className = "ytb-quality-badge";
+          badgeSpan.textContent = item.badge;
+          btn.appendChild(badgeSpan);
+        }
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          runNativeClick(item.el);
+          setQualityDrawerOpen(false);
+          scheduleHudHide(HUD_BAR_HIDE_MS);
+          showMiniToast(`画质 ${item.shortLabel}`, MINI_TOAST_MS);
+          clearTimeout(qualitySyncTimer);
+          qualitySyncTimer = setTimeout(() => {
+            qualitySyncTimer = null;
+            if (enabled) syncQualityUi();
+          }, 160);
+        });
+        els.qualityDrawer.appendChild(btn);
+      });
+    }
+
+    function setQualityDrawerOpen(open) {
+      qualityDrawerOpen = Boolean(open);
+      if (qualityDrawerOpen) {
+        speedDrawerOpen = false;
+        episodeDrawerOpen = false;
+        els.speedDrawer?.classList.remove("is-open");
+        els.epDrawer?.classList.remove("is-open");
+        els.root?.classList.remove("is-ep-open");
+        renderQualityDrawer();
+        positionQualityPopover();
+      }
+      els.qualityDrawer?.classList.toggle("is-open", qualityDrawerOpen);
+      if (qualityDrawerOpen) {
+        clearTimeout(hudTimer);
+        hudTimer = null;
+      } else if (hudVisible) {
+        scheduleHudHide(HUD_BAR_HIDE_MS);
       }
     }
 
@@ -868,19 +1249,6 @@
       const rawVol = Number.isFinite(video?.volume) ? video.volume : 1;
       if (rawVol > 0.02) lastNonZeroVolume = rawVol;
       const muted = Boolean(video?.muted) || rawVol <= 0.001;
-      const effectivePct = muted ? 0 : Math.round(rawVol * 100);
-      const svg = muted ? VOL_MUTE_SVG : VOL_ON_SVG;
-      const label = muted ? "取消静音" : "音量";
-
-      [els.volBtn, els.winVolBtn].forEach((btn) => {
-        if (!btn) return;
-        btn.innerHTML = svg;
-        btn.classList.toggle("is-muted", muted);
-        btn.setAttribute("aria-label", label);
-      });
-      if (els.volPct) els.volPct.textContent = String(effectivePct);
-      if (els.volFill) els.volFill.style.height = `${effectivePct}%`;
-      if (els.volThumb) els.volThumb.style.bottom = `${effectivePct}%`;
       if (els.unmutePill) {
         const showUnmute = Boolean(
           enabled && !nativeBarMode && !endingPassthrough && !userMuted && video && muted
@@ -1346,32 +1714,416 @@
       }, durationMs);
     }
 
-    function positionVolumePopover() {
-      if (!els.volPopover) return;
-      const btn = isFullscreenNow() ? els.volBtn : els.winVolBtn;
+    function hideLockBtn() {
+      clearTimeout(lockAwakeTimer);
+      lockAwakeTimer = null;
+      lockAwake = false;
+      els.root?.classList.remove("is-lock-awake");
+    }
+
+    function wakeLockBtn(ms = LOCK_AWAKE_MS) {
+      if (!enabled || nativeBarMode || !isFullscreenNow()) return;
+      clearTimeout(lockAwakeTimer);
+      lockAwake = true;
+      els.root?.classList.add("is-lock-awake");
+      lockAwakeTimer = setTimeout(() => {
+        lockAwakeTimer = null;
+        lockAwake = false;
+        els.root?.classList.remove("is-lock-awake");
+      }, ms);
+    }
+
+    function pulseLockBtn() {
+      if (!els.lockBtn) return;
+      els.lockBtn.classList.remove("is-pulse");
+      if (typeof els.lockBtn.offsetWidth === "number") void els.lockBtn.offsetWidth;
+      els.lockBtn.classList.add("is-pulse");
+    }
+
+    function setScreenLocked(nextLocked, { silent = false } = {}) {
+      const target = Boolean(nextLocked) && enabled && !nativeBarMode && isFullscreenNow();
+      if (screenLocked === target) {
+        if (target) wakeLockBtn(LOCK_AWAKE_MS);
+        return;
+      }
+      screenLocked = target;
+      if (screenLocked) {
+        clearTimeout(singleTapTimer);
+        singleTapTimer = null;
+        lastTapAt = 0;
+        speedDrawerOpen = false;
+        episodeDrawerOpen = false;
+        els.speedDrawer?.classList.remove("is-open");
+        els.epDrawer?.classList.remove("is-open");
+        els.root?.classList.remove("is-ep-open", "is-hud-open");
+        hudVisible = false;
+        clearTimeout(hudTimer);
+        hudTimer = null;
+        els.root?.classList.add("is-locked");
+        if (els.lockBtn) {
+          els.lockBtn.innerHTML = LOCK_CLOSED_SVG;
+          els.lockBtn.setAttribute("aria-label", "解锁");
+        }
+        wakeLockBtn(LOCK_AWAKE_MS);
+        if (!silent) showMiniToast("已锁屏，点击锁图标解锁", 1400);
+      } else {
+        hideLockBtn();
+        els.root?.classList.remove("is-locked", "is-lock-awake");
+        if (els.lockBtn) {
+          els.lockBtn.innerHTML = LOCK_OPEN_SVG;
+          els.lockBtn.setAttribute("aria-label", "锁屏");
+        }
+        if (!silent && enabled && !nativeBarMode) {
+          wakeHud(HUD_BAR_HIDE_MS);
+          showMiniToast("已解除锁屏", 1100);
+        }
+      }
+    }
+
+    function resolveCurrentEpisodeIndex(epData, ref) {
+      if (!epData || !Array.isArray(epData.items) || epData.items.length === 0 || !ref) return -1;
+      if (epData.kind === "bangumi") {
+        if (ref.epId) {
+          const i = epData.items.findIndex((item) => String(item.epId) === String(ref.epId));
+          if (i >= 0) return i;
+        }
+        return 0;
+      }
+      if (epData.kind === "pages") {
+        const i = epData.items.findIndex((item) => item.page === (ref.pageNum || 1));
+        return i >= 0 ? i : 0;
+      }
+      if (epData.kind === "season") {
+        if (ref.bvid) {
+          const targetBv = ref.bvid.toLowerCase();
+          const i = epData.items.findIndex((item) => String(item.bvid || "").toLowerCase() === targetBv);
+          if (i >= 0) return i;
+        }
+        if (ref.aid) {
+          const targetAid = String(ref.aid);
+          const i = epData.items.findIndex((item) => String(item.aid || "") === targetAid);
+          if (i >= 0) return i;
+        }
+        return 0;
+      }
+      return -1;
+    }
+
+    function switchToEpisode(item) {
+      if (!item || !item.videoId) return;
+      if (adapter?.getVideoId?.() === item.videoId) {
+        setEpisodeDrawerOpen(false);
+        return;
+      }
+      setEpisodeDrawerOpen(false);
+      wakeHud(HUD_BAR_HIDE_MS);
+      showMiniToast(`切换至 ${item.shortLabel || item.title || "下一集"}`, 1200);
+      if (typeof onNavigateVideo === "function") {
+        onNavigateVideo(item.videoId, item.title || "");
+      } else {
+        adapter?.navigateTo?.(item.videoId);
+      }
+    }
+
+    function scrollActiveEpisodeIntoView() {
+      const list = els.epList;
+      if (!list) return;
+      const active = lastActiveEpBtn || list.querySelector?.(".ytb-ep-item.is-active");
+      if (!active) return;
+      const listH = Number(list.clientHeight) || 0;
+      if (listH <= 0) return;
+      const btnTop = Number(active.offsetTop) || 0;
+      const btnH = Number(active.offsetHeight) || 0;
+      list.scrollTop = Math.max(0, btnTop - Math.max(0, (listH - btnH) / 2));
+    }
+
+    function renderEpisodeDrawer() {
+      if (!els.epList) return;
+      const ref = parseBiliVideoRef();
+      const epData = currentEpisodeData;
+      const items = Array.isArray(epData?.items) ? epData.items : [];
+      const curIdx = resolveCurrentEpisodeIndex(epData, ref);
+
+      if (els.epDrawerTitle) {
+        els.epDrawerTitle.textContent =
+          epData?.kind === "bangumi" ? "选集（番剧）" : epData?.kind === "pages" ? "分P列表" : "合集选集";
+      }
+      if (els.epDrawerSub) {
+        els.epDrawerSub.textContent = items.length > 1 && curIdx >= 0 ? `${curIdx + 1}/${items.length}` : "";
+      }
+
+      const isGrid = epData?.layout === "grid";
+      const renderKey = `${epData?.kind || "none"}|${epData?.layout || ""}|${curIdx}|${items.length}|${items[0]?.videoId || ""}|${items[items.length - 1]?.videoId || ""}`;
+      if (renderKey === lastEpisodeRenderKey && els.epList.children.length === items.length) {
+        return;
+      }
+
+      els.epList.classList.toggle("is-grid", Boolean(isGrid));
+      els.epList.textContent = "";
+
+      let activeBtn = null;
+      items.forEach((item, idx) => {
+        const isActive = idx === curIdx;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = `ytb-ep-item ${isGrid ? "ytb-ep-grid-item" : "ytb-ep-list-item"}${isActive ? " is-active" : ""}`;
+        btn.dataset.epIndex = String(idx);
+        if (isGrid) {
+          const numSpan = document.createElement("span");
+          numSpan.textContent = item.short || String(idx + 1);
+          btn.appendChild(numSpan);
+          if (item.badge) {
+            const badgeEl = document.createElement("span");
+            badgeEl.className = "ytb-ep-badge";
+            badgeEl.textContent = item.badge;
+            btn.appendChild(badgeEl);
+          }
+        } else {
+          if (item.pic) {
+            const thumb = document.createElement("img");
+            thumb.className = "ytb-ep-thumb";
+            thumb.src = item.pic;
+            thumb.alt = "";
+            thumb.loading = "lazy";
+            thumb.referrerPolicy = "no-referrer";
+            thumb.addEventListener?.("error", () => {
+              thumb.style.display = "none";
+            });
+            btn.appendChild(thumb);
+          }
+          const body = document.createElement("div");
+          body.className = "ytb-ep-list-body";
+          const topRow = document.createElement("div");
+          topRow.className = "ytb-ep-list-top";
+          const labelSpan = document.createElement("span");
+          labelSpan.textContent = `${item.shortLabel || `P${idx + 1}`}${isActive ? " · 播放中" : ""}`;
+          const durSpan = document.createElement("span");
+          durSpan.textContent = item.duration > 0 ? formatTime(item.duration) : "";
+          topRow.appendChild(labelSpan);
+          topRow.appendChild(durSpan);
+
+          const titleEl = document.createElement("div");
+          titleEl.className = "ytb-ep-list-title";
+          titleEl.textContent = item.title || item.shortLabel || `第 ${idx + 1} 集`;
+          body.appendChild(topRow);
+          body.appendChild(titleEl);
+          btn.appendChild(body);
+        }
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          switchToEpisode(item);
+        });
+        if (isActive) activeBtn = btn;
+        els.epList.appendChild(btn);
+      });
+
+      lastEpisodeRenderKey = renderKey;
+      lastActiveEpBtn = activeBtn;
+    }
+
+    function syncEpisodeUi() {
+      const ref = parseBiliVideoRef();
+      const epData = currentEpisodeData;
+      const items = Array.isArray(epData?.items) ? epData.items : [];
+      const curIdx = resolveCurrentEpisodeIndex(epData, ref);
+      const hasMulti = items.length > 1 && curIdx >= 0;
+      const hasPrev = hasMulti && curIdx > 0;
+      const hasNext = hasMulti && curIdx < items.length - 1;
+
+      els.prevBtn?.classList.toggle("is-hidden", !hasPrev);
+      els.nextBtn?.classList.toggle("is-hidden", !hasNext);
+      els.epBtn?.classList.toggle("is-hidden", !hasMulti);
+      els.winEpBtn?.classList.toggle("is-hidden", !hasMulti);
+
+      if (!hasMulti && episodeDrawerOpen) {
+        setEpisodeDrawerOpen(false);
+      }
+      renderEpisodeDrawer();
+    }
+
+    function ensureEpisodeDataLoaded() {
+      const ref = parseBiliVideoRef();
+      if (!ref || typeof fetch !== "function") {
+        currentEpisodeData = null;
+        syncEpisodeUi();
+        return null;
+      }
+      if (episodeCache.has(ref.key)) {
+        currentEpisodeData = episodeCache.get(ref.key);
+        syncEpisodeUi();
+        return Promise.resolve(currentEpisodeData);
+      }
+      if (episodePending.has(ref.key)) return episodePending.get(ref.key);
+
+      const promise = (async () => {
+        try {
+          let parsed = null;
+          if (ref.kind === "bangumi") {
+            const pgcQuery = ref.epId
+              ? `ep_id=${encodeURIComponent(ref.epId)}`
+              : `season_id=${encodeURIComponent(ref.seasonId)}`;
+            const json = await fetchJsonWithFallback(
+              `https://api.bilibili.com/pgc/view/web/season?${pgcQuery}`
+            );
+            const episodes = Array.isArray(json?.result?.episodes) ? json.result.episodes : [];
+            if (episodes.length > 1) {
+              parsed = {
+                kind: "bangumi",
+                layout: "grid",
+                items: episodes.map((ep, i) => ({
+                  epId: ep?.id ? String(ep.id) : null,
+                  bvid: ep?.bvid || null,
+                  short: String(ep?.title || i + 1),
+                  shortLabel: `第${ep?.title || i + 1}话`,
+                  title: ep?.long_title || ep?.share_copy || `第${ep?.title || i + 1}话`,
+                  badge: ep?.badge || "",
+                  duration: Math.round((Number(ep?.duration) || 0) / 1000),
+                  videoId: ep?.id ? `bili:bangumi/play/ep${ep.id}` : null,
+                })).filter((x) => x.videoId),
+              };
+            }
+          } else if (ref.bvid || ref.aid) {
+            const idQuery = ref.bvid
+              ? `bvid=${encodeURIComponent(ref.bvid)}`
+              : `aid=${encodeURIComponent(ref.aid)}`;
+            const json = await fetchJsonWithFallback(
+              `https://api.bilibili.com/x/web-interface/view?${idQuery}`
+            );
+            const data = json?.code === 0 ? json?.data : null;
+            if (data) {
+              const ownerBvid = data.bvid || ref.bvid || `av${data.aid || ref.aid}`;
+              if (Array.isArray(data.pages) && data.pages.length > 1) {
+                parsed = {
+                  kind: "pages",
+                  layout: "list",
+                  items: data.pages.map((p, i) => {
+                    const page = Number(p?.page) || i + 1;
+                    return {
+                      bvid: ownerBvid,
+                      cid: p?.cid || null,
+                      page,
+                      short: `P${page}`,
+                      shortLabel: `P${page}`,
+                      title: p?.part || `P${page}`,
+                      pic: normalizeThumbUrl(p?.first_frame || ""),
+                      duration: Number(p?.duration) || 0,
+                      videoId: page > 1 ? `bili:video/${ownerBvid}?p=${page}` : `bili:video/${ownerBvid}`,
+                    };
+                  }),
+                };
+              } else if (Array.isArray(data.ugc_season?.sections) && data.ugc_season.sections.length > 0) {
+                const flatEps = [];
+                data.ugc_season.sections.forEach((sec) => {
+                  if (Array.isArray(sec?.episodes)) flatEps.push(...sec.episodes);
+                });
+                if (flatEps.length > 1) {
+                  parsed = {
+                    kind: "season",
+                    layout: "list",
+                    items: flatEps
+                      .map((ep, i) => {
+                        const epBvid = ep?.bvid || ep?.arc?.bvid || "";
+                        const epAid = ep?.aid || ep?.arc?.aid || "";
+                        const epKeyId = epBvid || (epAid ? `av${epAid}` : "");
+                        if (!epKeyId) return null;
+                        return {
+                          bvid: epBvid || null,
+                          aid: epAid ? String(epAid) : null,
+                          short: `${i + 1}`,
+                          shortLabel: `第${i + 1}集`,
+                          title: ep.title || ep.arc?.title || `第${i + 1}集`,
+                          pic: normalizeThumbUrl(ep.arc?.pic || ep.pic || ""),
+                          duration: Number(ep.arc?.duration) || Number(ep.page?.duration) || 0,
+                          videoId: `bili:video/${epKeyId}`,
+                        };
+                      })
+                      .filter(Boolean),
+                  };
+                }
+              }
+            }
+          }
+
+          if (!parsed) {
+            parsed = { kind: "single", layout: "list", items: [] };
+          }
+          episodeCache.set(ref.key, parsed);
+          if (parsed.items.length > 1) {
+            parsed.items.forEach((item) => {
+              if (parsed.kind === "bangumi" && item.epId) {
+                episodeCache.set(`ep${item.epId}`, parsed);
+              } else if (parsed.kind === "pages" && item.bvid) {
+                episodeCache.set(`${item.bvid}?p=${item.page}`, parsed);
+              } else if (parsed.kind === "season" && item.bvid) {
+                episodeCache.set(`${item.bvid}?p=1`, parsed);
+              }
+            });
+          }
+          if (enabled && parseBiliVideoRef()?.key === ref.key) {
+            currentEpisodeData = parsed;
+            lastEpisodeRenderKey = "";
+            syncEpisodeUi();
+          }
+          return parsed;
+        } catch {
+          return null;
+        } finally {
+          episodePending.delete(ref.key);
+        }
+      })();
+
+      episodePending.set(ref.key, promise);
+      return promise;
+    }
+
+    function refreshVideoContext({ skipAlive = false } = {}) {
+      if (!enabled) return;
+      if (!skipAlive) ensureAlive();
+      const ref = parseBiliVideoRef();
+      const nextKey = ref?.key || "";
+      if (nextKey !== lastEpisodeRefKey) {
+        clearLockedBoostSpeed({ restore: false });
+        lastEpisodeRefKey = nextKey;
+        lastEpisodeRenderKey = "";
+        currentEpisodeData = episodeCache.get(nextKey) || null;
+        syncEpisodeUi();
+        ensureEpisodeDataLoaded();
+        scheduleVideoshotPreload(1200);
+      } else {
+        syncEpisodeUi();
+      }
+      syncQualityUi();
+      syncTopBar();
+    }
+
+    function positionSpeedPopover() {
+      if (!els.speedDrawer) return;
+      const btn = isFullscreenNow() ? els.speedBtn : els.winSpeedBtn;
       const rootRect = els.root?.getBoundingClientRect?.();
       const btnRect = btn?.getBoundingClientRect?.();
       const scale = Number(host?.style?.getPropertyValue?.("--ytb-s")) || 1;
       if (rootRect && rootRect.width > 0 && btnRect && btnRect.width > 0) {
-        const centerX = (btnRect.left - rootRect.left) + btnRect.width / 2;
-        const halfW = 16 * scale;
-        const clampedX = Math.max(halfW + 6, Math.min(rootRect.width - halfW - 6, centerX));
-        els.volPopover.style.left = `${clampedX}px`;
+        const centerX = btnRect.left - rootRect.left + btnRect.width / 2;
+        const halfW = 38 * scale;
+        const clampedX = Math.max(halfW + 8, Math.min(rootRect.width - halfW - 8, centerX));
+        els.speedDrawer.style.left = `${clampedX}px`;
       } else {
-        els.volPopover.style.left = "";
+        els.speedDrawer.style.left = "";
       }
     }
 
-    function setVolumePopoverOpen(open) {
-      volumePopoverOpen = Boolean(open);
-      if (volumePopoverOpen) {
-        speedDrawerOpen = false;
-        els.speedDrawer?.classList.remove("is-open");
-        syncVolumeUi();
-        positionVolumePopover();
+    function setSpeedDrawerOpen(open) {
+      speedDrawerOpen = Boolean(open);
+      if (speedDrawerOpen) {
+        qualityDrawerOpen = false;
+        episodeDrawerOpen = false;
+        els.qualityDrawer?.classList.remove("is-open");
+        els.epDrawer?.classList.remove("is-open");
+        els.root?.classList.remove("is-ep-open");
+        positionSpeedPopover();
       }
-      els.volPopover?.classList.toggle("is-open", volumePopoverOpen);
-      if (volumePopoverOpen) {
+      els.speedDrawer?.classList.toggle("is-open", speedDrawerOpen);
+      if (speedDrawerOpen) {
         clearTimeout(hudTimer);
         hudTimer = null;
       } else if (hudVisible) {
@@ -1379,14 +2131,19 @@
       }
     }
 
-    function setSpeedDrawerOpen(open) {
-      speedDrawerOpen = Boolean(open);
-      if (speedDrawerOpen) {
-        volumePopoverOpen = false;
-        els.volPopover?.classList.remove("is-open");
+    function setEpisodeDrawerOpen(open) {
+      episodeDrawerOpen = Boolean(open);
+      if (episodeDrawerOpen) {
+        speedDrawerOpen = false;
+        qualityDrawerOpen = false;
+        els.speedDrawer?.classList.remove("is-open");
+        els.qualityDrawer?.classList.remove("is-open");
       }
-      els.speedDrawer?.classList.toggle("is-open", speedDrawerOpen);
-      if (speedDrawerOpen) {
+      els.epDrawer?.classList.toggle("is-open", episodeDrawerOpen);
+      els.root?.classList.toggle("is-ep-open", episodeDrawerOpen);
+      if (episodeDrawerOpen) {
+        renderEpisodeDrawer();
+        scrollActiveEpisodeIntoView();
         clearTimeout(hudTimer);
         hudTimer = null;
       } else if (hudVisible) {
@@ -1399,7 +2156,8 @@
       hudTimer = null;
       hudVisible = false;
       setSpeedDrawerOpen(false);
-      setVolumePopoverOpen(false);
+      setQualityDrawerOpen(false);
+      setEpisodeDrawerOpen(false);
       els.root?.classList.remove("is-hud-open");
     }
 
@@ -1408,10 +2166,11 @@
       const video = currentVideo || adapter?.getVideoElement?.();
       if (
         Boolean(video?.paused) ||
+        screenLocked ||
         speedDrawerOpen ||
-        volumePopoverOpen ||
+        qualityDrawerOpen ||
+        episodeDrawerOpen ||
         draggingSeek ||
-        draggingVolume ||
         gestureMode === "seek" ||
         gestureMode === "volume"
       ) {
@@ -1426,11 +2185,16 @@
 
     function wakeHud(ms = HUD_BAR_HIDE_MS) {
       if (!enabled || nativeBarMode || endingPassthrough) return;
+      if (screenLocked) {
+        wakeLockBtn(LOCK_AWAKE_MS);
+        return;
+      }
       hudVisible = true;
       els.root?.classList.add("is-hud-open");
       syncPlaybackUi();
       syncVolumeUi();
       syncDanmakuUi();
+      syncQualityUi();
       syncRateUi();
       syncTopBar();
       scheduleHudHide(ms);
@@ -1454,6 +2218,9 @@
 
     function setNativeBarMode(nextNative) {
       nativeBarMode = Boolean(nextNative);
+      if (screenLocked) {
+        setScreenLocked(false, { silent: true });
+      }
       if (nativeBarMode) {
         endingPassthrough = false;
         els.root?.classList.remove("is-ending-passthrough");
@@ -1475,10 +2242,6 @@
     function renderSpeedDrawer() {
       if (!els.speedDrawer) return;
       els.speedDrawer.textContent = "";
-      const header = document.createElement("div");
-      header.className = "ytb-speed-header";
-      header.textContent = "倍速";
-      els.speedDrawer.appendChild(header);
       RATE_OPTIONS.forEach((rate) => {
         const btn = document.createElement("button");
         btn.type = "button";
@@ -1487,6 +2250,7 @@
         btn.textContent = formatOptionText(rate);
         btn.addEventListener("click", (e) => {
           e.stopPropagation();
+          clearLockedBoostSpeed({ restore: false });
           baseRate = rate;
           engine?.setPlaybackRate?.(rate, { showToast: true });
           syncRateUi();
@@ -1511,117 +2275,17 @@
         });
       });
 
-      [els.volBtn, els.winVolBtn].forEach((btn) => {
-        btn?.addEventListener("click", (e) => {
-          e.stopPropagation();
-          const video = currentVideo || adapter?.getVideoElement?.();
-          const isMuted =
-            Boolean(video?.muted) || (Number.isFinite(video?.volume) ? video.volume : 1) <= 0.001;
-          if (isMuted) {
-            unmuteVideo();
-            wakeHud(HUD_BAR_HIDE_MS);
-            return;
-          }
-          if (!hudVisible) wakeHud(HUD_BAR_HIDE_MS);
-          setVolumePopoverOpen(!volumePopoverOpen);
-        });
-      });
-
-      const updateVolFromClientY = (clientY) => {
-        const track = els.volTrack;
-        const video = currentVideo || adapter?.getVideoElement?.();
-        if (!track || !video) return;
-        const rect = track.getBoundingClientRect?.() || { top: 0, bottom: 120, height: 120 };
-        const height = Math.max(1, rect.height || 120);
-        const rawRatio = Math.max(0, Math.min(1, (rect.bottom - clientY) / height));
-        const ratio = rawRatio <= 0.015 ? 0 : rawRatio;
-        userMuted = ratio === 0;
-        video.volume = ratio;
-        video.muted = ratio === 0;
-        syncVolumeUi();
-        showVolumeHud(ratio * 100);
-      };
-
-      const onVolWindowMove = (e) => {
-        if (!draggingVolume) return;
-        const pid = e.pointerId ?? 0;
-        if (activeVolPointerId !== null && pid !== activeVolPointerId) return;
-        updateVolFromClientY(e.clientY);
-      };
-
-      const finishVolumeDrag = (e) => {
-        if (!draggingVolume) return;
-        if (e && e.pointerId !== undefined && activeVolPointerId !== null && e.pointerId !== activeVolPointerId) {
+      els.boostChip?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (!enabled || !speedLockedByBoost) return;
+        if (screenLocked) {
+          wakeLockBtn(LOCK_AWAKE_MS);
+          pulseLockBtn();
+          showMiniToast("已锁屏，点击锁图标解锁", 1100);
           return;
         }
-        e?.stopPropagation?.();
-        draggingVolume = false;
-        activeVolPointerId = null;
-        unbindVolWindowEvents();
-        hideGestureHud(VOL_HUD_HIDE_MS);
-        scheduleHudHide(HUD_BAR_HIDE_MS);
-      };
-
-      const bindVolWindowEvents = () => {
-        if (volWindowBound) return;
-        volWindowBound = true;
-        window.addEventListener("pointermove", onVolWindowMove, true);
-        window.addEventListener("pointerup", finishVolumeDrag, true);
-        window.addEventListener("pointercancel", finishVolumeDrag, true);
-        window.addEventListener("blur", finishVolumeDrag);
-      };
-
-      unbindVolWindowEvents = () => {
-        if (!volWindowBound) return;
-        volWindowBound = false;
-        window.removeEventListener("pointermove", onVolWindowMove, true);
-        window.removeEventListener("pointerup", finishVolumeDrag, true);
-        window.removeEventListener("pointercancel", finishVolumeDrag, true);
-        window.removeEventListener("blur", finishVolumeDrag);
-      };
-
-      els.volTrack?.addEventListener(
-        "touchstart",
-        (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-        },
-        { passive: false }
-      );
-      els.volTrack?.addEventListener(
-        "touchmove",
-        (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-        },
-        { passive: false }
-      );
-
-      els.volTrack?.addEventListener("pointerdown", (e) => {
-        if (e.pointerType === "mouse" && e.button !== 0) return;
-        e.preventDefault();
-        e.stopPropagation();
-        draggingVolume = true;
-        activeVolPointerId = e.pointerId ?? 0;
-        clearTimeout(hudTimer);
-        hudTimer = null;
-        try {
-          els.volTrack.setPointerCapture?.(e.pointerId);
-        } catch {}
-        bindVolWindowEvents();
-        updateVolFromClientY(e.clientY);
+        clearLockedBoostSpeed({ restore: true });
       });
-
-      els.volTrack?.addEventListener("pointermove", (e) => {
-        if (!draggingVolume) return;
-        const pid = e.pointerId ?? 0;
-        if (activeVolPointerId !== null && pid !== activeVolPointerId) return;
-        e.stopPropagation();
-        updateVolFromClientY(e.clientY);
-      });
-
-      els.volTrack?.addEventListener("pointerup", finishVolumeDrag);
-      els.volTrack?.addEventListener("pointercancel", finishVolumeDrag);
 
       [els.dmBtn, els.winDmBtn].forEach((btn) => {
         btn?.addEventListener("click", (e) => {
@@ -1638,9 +2302,69 @@
         });
       });
 
+      els.lockBtn?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setScreenLocked(!screenLocked);
+      });
+
+      els.prevBtn?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (screenLocked) {
+          wakeLockBtn(LOCK_AWAKE_MS);
+          return;
+        }
+        const ref = parseBiliVideoRef();
+        const idx = resolveCurrentEpisodeIndex(currentEpisodeData, ref);
+        if (idx > 0 && currentEpisodeData?.items?.[idx - 1]) {
+          switchToEpisode(currentEpisodeData.items[idx - 1]);
+        }
+      });
+
+      els.nextBtn?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (screenLocked) {
+          wakeLockBtn(LOCK_AWAKE_MS);
+          return;
+        }
+        const ref = parseBiliVideoRef();
+        const idx = resolveCurrentEpisodeIndex(currentEpisodeData, ref);
+        const items = currentEpisodeData?.items || [];
+        if (idx >= 0 && idx < items.length - 1 && items[idx + 1]) {
+          switchToEpisode(items[idx + 1]);
+        }
+      });
+
+      [els.epBtn, els.winEpBtn].forEach((btn) => {
+        btn?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (screenLocked) {
+            wakeLockBtn(LOCK_AWAKE_MS);
+            return;
+          }
+          if (!hudVisible) wakeHud(HUD_BAR_HIDE_MS);
+          setEpisodeDrawerOpen(!episodeDrawerOpen);
+        });
+      });
+
+      [els.qualityBtn, els.winQualityBtn].forEach((btn) => {
+        btn?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (screenLocked) {
+            wakeLockBtn(LOCK_AWAKE_MS);
+            return;
+          }
+          if (!hudVisible) wakeHud(HUD_BAR_HIDE_MS);
+          setQualityDrawerOpen(!qualityDrawerOpen);
+        });
+      });
+
       [els.speedBtn, els.winSpeedBtn].forEach((btn) => {
         btn?.addEventListener("click", (e) => {
           e.stopPropagation();
+          if (screenLocked) {
+            wakeLockBtn(LOCK_AWAKE_MS);
+            return;
+          }
           if (!hudVisible) wakeHud(HUD_BAR_HIDE_MS);
           setSpeedDrawerOpen(!speedDrawerOpen);
         });
@@ -1650,7 +2374,8 @@
         btn?.addEventListener("click", (e) => {
           e.stopPropagation();
           toggleFullscreen();
-          wakeHud(HUD_BAR_HIDE_MS);
+          if (hudVisible) scheduleHudHide(HUD_BAR_HIDE_MS);
+          else wakeHud(HUD_BAR_HIDE_MS);
         });
       });
 
@@ -1754,7 +2479,8 @@
           e.preventDefault();
           e.stopPropagation();
           if (speedDrawerOpen) setSpeedDrawerOpen(false);
-          if (volumePopoverOpen) setVolumePopoverOpen(false);
+          if (qualityDrawerOpen) setQualityDrawerOpen(false);
+          if (episodeDrawerOpen) setEpisodeDrawerOpen(false);
           draggingSeek = true;
           activeScrubPointerId = e.pointerId ?? 0;
           activeScrubWrap = wrapEl;
@@ -1793,6 +2519,26 @@
           e.stopPropagation();
         });
 
+        const handleSingleTap = () => {
+          singleTapTimer = null;
+          if (!enabled || nativeBarMode || endingPassthrough) return;
+          if (screenLocked) {
+            if (lockAwake) hideLockBtn();
+            else wakeLockBtn(LOCK_AWAKE_MS);
+            return;
+          }
+          if (speedDrawerOpen || qualityDrawerOpen || episodeDrawerOpen) {
+            setSpeedDrawerOpen(false);
+            setQualityDrawerOpen(false);
+            setEpisodeDrawerOpen(false);
+            scheduleHudHide(HUD_BAR_HIDE_MS);
+          } else if (hudVisible) {
+            hideHud();
+          } else {
+            wakeHud(HUD_BAR_HIDE_MS);
+          }
+        };
+
         shield.addEventListener("pointerdown", (e) => {
           if (!enabled || nativeBarMode || endingPassthrough) return;
           if (e.pointerType === "mouse" && e.button !== 0) return;
@@ -1807,6 +2553,7 @@
           gestureStartY = e.clientY;
           gestureStartAt = Date.now();
           gestureMaxDist = 0;
+          boostLockArmed = false;
           const video = currentVideo || adapter?.getVideoElement?.();
           gestureStartTimeSec = Number.isFinite(video?.currentTime) ? video.currentTime : 0;
           gestureStartVol = Number.isFinite(video?.volume) ? video.volume : 1;
@@ -1815,18 +2562,39 @@
           longPressTimer = setTimeout(() => {
             longPressTimer = null;
             if (!enabled || nativeBarMode || endingPassthrough || gestureMode !== "pending") return;
+            clearTimeout(singleTapTimer);
+            singleTapTimer = null;
+            lastTapAt = 0;
+            if (screenLocked) {
+              gestureMode = "locked_block";
+              wakeLockBtn(LOCK_AWAKE_MS);
+              pulseLockBtn();
+              showMiniToast("已锁屏，点击锁图标解锁", 1100);
+              return;
+            }
             preBoostRate = getDisplayRate();
             gestureMode = "boost";
+            boostLockArmed = false;
             shield.setPointerCapture?.(activePointerId);
             bindBoostGlobalRelease();
             engine?.setPlaybackRate?.(2.0, { showToast: false });
             syncRateUi();
+            if (els.boostText) els.boostText.textContent = "2.0x 倍速播放中";
+            if (els.boostHint) els.boostHint.textContent = "上滑锁定";
+            els.boostChip?.classList.remove("is-lock-armed");
             els.boostChip?.classList.add("is-visible");
           }, LONG_PRESS_MS);
         });
 
         shield.addEventListener("pointermove", (e) => {
-          if (!enabled || nativeBarMode || endingPassthrough || gestureMode === "idle" || gestureMode === "scroll_yield") {
+          if (
+            !enabled ||
+            nativeBarMode ||
+            endingPassthrough ||
+            gestureMode === "idle" ||
+            gestureMode === "scroll_yield" ||
+            gestureMode === "locked_block"
+          ) {
             return;
           }
           const pid = e.pointerId ?? 0;
@@ -1837,12 +2605,39 @@
           const dist = Math.hypot(dx, dy);
           gestureMaxDist = Math.max(gestureMaxDist, dist);
 
-          if (dist > TAP_MOVE_LIMIT_PX && longPressTimer) {
-            clearTimeout(longPressTimer);
-            longPressTimer = null;
+          if (gestureMode === "boost") {
+            if (!boostLockArmed && dy <= -BOOST_LOCK_SLIDE_PX) {
+              boostLockArmed = true;
+              els.boostChip?.classList.add("is-lock-armed");
+              if (els.boostText) els.boostText.textContent = "松手锁定 2.0x 倍速";
+              if (els.boostHint) els.boostHint.textContent = "已到位";
+            } else if (boostLockArmed && dy > -BOOST_LOCK_SLIDE_PX * 0.65) {
+              boostLockArmed = false;
+              els.boostChip?.classList.remove("is-lock-armed");
+              if (els.boostText) els.boostText.textContent = "2.0x 倍速播放中";
+              if (els.boostHint) els.boostHint.textContent = "上滑锁定";
+            }
+            return;
+          }
+
+          if (dist > TAP_MOVE_LIMIT_PX) {
+            if (longPressTimer) {
+              clearTimeout(longPressTimer);
+              longPressTimer = null;
+            }
+            clearTimeout(singleTapTimer);
+            singleTapTimer = null;
+            lastTapAt = 0;
           }
 
           if (gestureMode === "pending") {
+            if (screenLocked && dist > DRAG_THRESHOLD_PX) {
+              gestureMode = "locked_block";
+              wakeLockBtn(LOCK_AWAKE_MS);
+              pulseLockBtn();
+              showMiniToast("已锁屏，点击锁图标解锁", 1100);
+              return;
+            }
             if (Math.abs(dx) > DRAG_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy) * 1.15) {
               gestureMode = "seek";
               try {
@@ -1889,8 +2684,12 @@
             const rect = shield.getBoundingClientRect?.() || { left: 0, width: 360, height: 240 };
             const height = Math.max(120, (rect.height || 240) * 0.65);
             const nextVol = Math.max(0, Math.min(1, gestureStartVol - dy / height));
-            video.volume = nextVol;
-            if (nextVol > 0) {
+            if (nextVol <= 0.005) {
+              video.volume = 0;
+              video.muted = true;
+              userMuted = true;
+            } else {
+              video.volume = nextVol;
               userMuted = false;
               if (video.muted) video.muted = false;
             }
@@ -1902,7 +2701,7 @@
         shield.addEventListener(
           "touchmove",
           (e) => {
-            if (gestureMode === "seek" || gestureMode === "volume") {
+            if (gestureMode === "seek" || gestureMode === "volume" || gestureMode === "boost") {
               e.preventDefault();
             }
           },
@@ -1913,7 +2712,7 @@
           const pid = e.pointerId ?? 0;
           if (activePointerId !== null && pid !== activePointerId) return;
           if (gestureMode === "boost") {
-            releaseBoost();
+            releaseBoost({ cancelLock: true });
           } else {
             clearTimeout(longPressTimer);
             longPressTimer = null;
@@ -1930,7 +2729,7 @@
           clearTimeout(longPressTimer);
           longPressTimer = null;
           if (gestureMode === "boost") {
-            releaseBoost();
+            releaseBoost({ cancelLock: false });
             e.stopPropagation();
             return;
           }
@@ -1958,12 +2757,31 @@
             gestureMaxDist <= TAP_MOVE_LIMIT_PX &&
             heldMs < LONG_PRESS_MS
           ) {
-            if (speedDrawerOpen || volumePopoverOpen) {
-              setSpeedDrawerOpen(false);
-              setVolumePopoverOpen(false);
-              scheduleHudHide(HUD_BAR_HIDE_MS);
+            const now = Date.now();
+            const isDoubleTap =
+              lastTapAt > 0 &&
+              now - lastTapAt <= DOUBLE_TAP_MS &&
+              Math.hypot((e.clientX || 0) - lastTapX, (e.clientY || 0) - lastTapY) <= DOUBLE_TAP_DIST_PX;
+            if (isDoubleTap) {
+              clearTimeout(singleTapTimer);
+              singleTapTimer = null;
+              lastTapAt = 0;
+              if (screenLocked) {
+                wakeLockBtn(LOCK_AWAKE_MS);
+                pulseLockBtn();
+                showMiniToast("已锁屏，点击锁图标解锁", 1100);
+              } else {
+                if (speedDrawerOpen) setSpeedDrawerOpen(false);
+                if (qualityDrawerOpen) setQualityDrawerOpen(false);
+                if (episodeDrawerOpen) setEpisodeDrawerOpen(false);
+                togglePlayWithPulse();
+              }
             } else {
-              togglePlayWithPulse();
+              lastTapAt = now;
+              lastTapX = e.clientX || 0;
+              lastTapY = e.clientY || 0;
+              clearTimeout(singleTapTimer);
+              singleTapTimer = setTimeout(handleSingleTap, SINGLE_TAP_DELAY_MS);
             }
           }
         };
@@ -2016,36 +2834,140 @@
             touch-action: none;
           }
           .ytb-root.is-native-mode .ytb-shield,
+          .ytb-root.is-native-mode .ytb-lock-btn,
           .ytb-root.is-ending-passthrough .ytb-shield,
           .ytb-root.is-ending-passthrough .ytb-bottom-bar,
           .ytb-root.is-ending-passthrough .ytb-top-bar,
-          .ytb-root.is-ending-passthrough .ytb-win-top {
+          .ytb-root.is-ending-passthrough .ytb-win-top,
+          .ytb-root.is-ending-passthrough .ytb-lock-btn,
+          .ytb-root.is-locked .ytb-top-bar,
+          .ytb-root.is-locked .ytb-win-top,
+          .ytb-root.is-locked .ytb-bottom-bar,
+          .ytb-root.is-locked .ytb-speed-drawer,
+          .ytb-root.is-locked .ytb-quality-drawer,
+          .ytb-root.is-locked .ytb-ep-drawer {
             display: none !important;
             pointer-events: none !important;
           }
+          .ytb-root.is-ep-open .ytb-lock-btn {
+            opacity: 0 !important;
+            pointer-events: none !important;
+          }
+          .ytb-icon-btn.is-hidden,
+          .ytb-ghost-btn.is-hidden {
+            display: none !important;
+          }
 
-          /* Top-Center Lightweight 2.0x Boost Chip */
+          /* Screen Lock Floating Button (Fullscreen Right Center, Native App Style) */
+          .ytb-lock-btn {
+            position: absolute;
+            right: calc(16px * var(--ytb-s, 1));
+            top: 50%;
+            transform: translateY(-50%);
+            width: calc(40px * var(--ytb-s, 1));
+            height: calc(40px * var(--ytb-s, 1));
+            border-radius: 9999px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: rgba(18, 18, 22, 0.68);
+            backdrop-filter: blur(8px);
+            color: #ffffff;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 8;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.12s ease;
+          }
+          .ytb-lock-btn svg {
+            width: calc(19px * var(--ytb-s, 1));
+            height: calc(19px * var(--ytb-s, 1));
+          }
+          .ytb-root.is-fullscreen:not(.is-native-mode):not(.is-ending-passthrough) .ytb-lock-btn {
+            display: flex;
+          }
+          .ytb-root.is-fullscreen.is-hud-open:not(.is-native-mode) .ytb-lock-btn,
+          .ytb-root.is-fullscreen.is-lock-awake:not(.is-native-mode) .ytb-lock-btn {
+            opacity: 1;
+            pointer-events: auto;
+          }
+          .ytb-root.is-locked .ytb-lock-btn {
+            border-color: rgba(251, 114, 153, 0.72);
+            color: #fb7299;
+          }
+          .ytb-lock-btn.is-pulse {
+            animation: ytbLockPulse 0.34s ease;
+          }
+          @keyframes ytbLockPulse {
+            0%, 100% { transform: translateY(-50%) scale(1); }
+            45% { transform: translateY(-50%) scale(1.16); }
+          }
+
+          /* Top-Center 2.0x Boost Chip (with Slide-Up Lock State) */
           .ytb-boost-chip {
             position: absolute;
-            top: calc(10px * var(--ytb-s, 1));
+            top: calc(12px * var(--ytb-s, 1));
             left: 50%;
             transform: translateX(-50%);
             z-index: 9;
-            padding: calc(4px * var(--ytb-s, 1)) calc(11px * var(--ytb-s, 1));
+            padding: calc(4px * var(--ytb-s, 1)) calc(12px * var(--ytb-s, 1));
             border-radius: 9999px;
-            background: rgba(0, 0, 0, 0.64);
+            background: rgba(0, 0, 0, 0.68);
             backdrop-filter: blur(6px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
             color: #ffffff;
             font-size: calc(12px * var(--ytb-s, 1));
             font-weight: 600;
             display: none;
             align-items: center;
-            gap: calc(4px * var(--ytb-s, 1));
+            gap: calc(6px * var(--ytb-s, 1));
             pointer-events: none;
             white-space: nowrap;
+            transition: background 0.15s ease, border-color 0.15s ease;
           }
           .ytb-boost-chip.is-visible {
             display: inline-flex;
+          }
+          .ytb-boost-chip.is-lock-armed {
+            background: rgba(251, 114, 153, 0.9);
+            border-color: rgba(255, 255, 255, 0.4);
+          }
+          .ytb-boost-chip.is-locked-speed {
+            pointer-events: auto;
+            cursor: pointer;
+            background: rgba(20, 20, 26, 0.84);
+            border-color: rgba(251, 114, 153, 0.55);
+            transition: opacity 0.25s ease, background 0.15s ease, padding 0.2s ease;
+          }
+          .ytb-boost-chip.is-locked-speed:active {
+            background: rgba(251, 114, 153, 0.35);
+          }
+          .ytb-boost-chip.is-locked-compact {
+            opacity: 0.62;
+            padding: calc(3px * var(--ytb-s, 1)) calc(9px * var(--ytb-s, 1));
+          }
+          .ytb-boost-arrows {
+            color: #fb7299;
+            letter-spacing: -1px;
+            animation: ytbBoostPulse 0.9s infinite ease-in-out;
+          }
+          .ytb-boost-chip.is-lock-armed .ytb-boost-arrows {
+            color: #ffffff;
+          }
+          .ytb-boost-hint {
+            font-size: calc(10.5px * var(--ytb-s, 1));
+            color: rgba(255, 255, 255, 0.68);
+            padding-left: calc(2px * var(--ytb-s, 1));
+            border-left: 1px solid rgba(255, 255, 255, 0.22);
+          }
+          .ytb-boost-chip.is-lock-armed .ytb-boost-hint,
+          .ytb-boost-chip.is-locked-speed .ytb-boost-hint {
+            color: #ffffff;
+          }
+          @keyframes ytbBoostPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.45; }
           }
 
           /* Top-Left Lightweight Auto-Muted Pill */
@@ -2079,8 +3001,8 @@
           .ytb-return-pill {
             position: absolute;
             top: calc(10px * var(--ytb-s, 1));
-            right: calc(12px * var(--ytb-s, 1));
-            z-index: 8;
+            right: calc(10px * var(--ytb-s, 1));
+            z-index: 20;
             height: calc(28px * var(--ytb-s, 1));
             padding: 0 calc(10px * var(--ytb-s, 1));
             border-radius: 9999px;
@@ -2093,8 +3015,8 @@
             display: none;
             align-items: center;
             cursor: pointer;
-            opacity: 0;
-            pointer-events: none;
+            opacity: 0.55;
+            pointer-events: auto;
             transition: opacity 0.2s ease;
           }
           .ytb-root.is-native-mode .ytb-return-pill {
@@ -2197,13 +3119,16 @@
             opacity: 1;
           }
           .ytb-scrub-preview.is-track-mode {
-            bottom: calc(46px * var(--ytb-s, 1));
+            bottom: calc(54px * var(--ytb-s, 1));
           }
           .ytb-root.is-fullscreen .ytb-scrub-preview.is-track-mode {
-            bottom: calc(74px * var(--ytb-s, 1));
+            top: 46%;
+            left: 50% !important;
+            bottom: auto;
+            transform: translate(-50%, -50%);
           }
           .ytb-scrub-preview.is-swipe-mode {
-            top: 28%;
+            top: 46%;
             left: 50%;
             transform: translate(-50%, -50%);
           }
@@ -2512,19 +3437,26 @@
             position: absolute;
             top: 50%;
             left: 0%;
-            width: calc(10px * var(--ytb-s, 1));
-            height: calc(10px * var(--ytb-s, 1));
-            border-radius: 9999px;
-            background: #ffffff;
-            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
+            width: calc(20px * var(--ytb-s, 1));
+            height: calc(20px * var(--ytb-s, 1));
+            border-radius: 0;
+            background: transparent url("${CUSTOM_THUMB_DATA_URI}") center / contain no-repeat;
+            box-shadow: none;
+            filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.55));
             transform: translate(-50%, -50%);
-            transition: width 0.1s ease, height 0.1s ease;
+            transition: width 0.12s ease, height 0.12s ease, transform 0.12s ease;
             pointer-events: none;
           }
+          .ytb-bar-win .ytb-progress-thumb {
+            width: calc(18px * var(--ytb-s, 1));
+            height: calc(18px * var(--ytb-s, 1));
+          }
           .ytb-progress-wrap.is-dragging .ytb-progress-thumb {
-            width: calc(14px * var(--ytb-s, 1));
-            height: calc(14px * var(--ytb-s, 1));
-            box-shadow: 0 0 0 calc(2px * var(--ytb-s, 1)) #fb7299;
+            width: calc(26px * var(--ytb-s, 1));
+            height: calc(26px * var(--ytb-s, 1));
+            transform: translate(-50%, -50%) rotate(-8deg);
+            filter: drop-shadow(0 0 4px rgba(251, 114, 153, 0.9));
+            box-shadow: none;
           }
 
           .ytb-tier-2 {
@@ -2565,10 +3497,6 @@
             width: calc(19px * var(--ytb-s, 1));
             height: calc(19px * var(--ytb-s, 1));
           }
-          .ytb-btn-vol svg {
-            width: calc(18px * var(--ytb-s, 1));
-            height: calc(18px * var(--ytb-s, 1));
-          }
           .ytb-btn-dm svg {
             width: calc(20px * var(--ytb-s, 1));
             height: calc(20px * var(--ytb-s, 1));
@@ -2579,142 +3507,275 @@
             height: calc(26px * var(--ytb-s, 1));
             padding: 0 calc(4px * var(--ytb-s, 1));
           }
-          .ytb-btn-speed {
+          .ytb-btn-speed,
+          .ytb-btn-quality {
             font-weight: 600;
           }
           .ytb-btn-speed.is-active-rate {
             color: #fb7299;
           }
 
-          /* Volume Popover (Bilibili Native 32px Slim Bar) */
-          .ytb-vol-popover {
+          /* Floating Compact Speed Popover Anchored Above 倍速 Button */
+          .ytb-speed-drawer {
             position: absolute;
-            left: calc(80% - calc(28px * var(--ytb-s, 1)));
-            bottom: calc(42px * var(--ytb-s, 1));
-            transform: translateX(-50%);
+            bottom: calc(58px * var(--ytb-s, 1));
+            left: 86%;
+            transform: translate(-50%, 6px);
+            width: calc(74px * var(--ytb-s, 1));
             z-index: 9;
-            width: calc(32px * var(--ytb-s, 1));
-            height: calc(102px * var(--ytb-s, 1));
-            padding: calc(2px * var(--ytb-s, 1)) 0 calc(10px * var(--ytb-s, 1));
-            border-radius: calc(3px * var(--ytb-s, 1));
-            border: none;
-            box-shadow: none;
-            background: rgba(20, 20, 20, 0.9);
-            display: none;
+            padding: calc(5px * var(--ytb-s, 1)) 0;
+            border-radius: calc(8px * var(--ytb-s, 1));
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(18, 19, 25, 0.94);
+            backdrop-filter: blur(12px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.48);
+            display: flex;
             flex-direction: column;
-            align-items: center;
+            align-items: stretch;
+            gap: 0;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.15s ease, transform 0.15s ease;
+          }
+          .ytb-root:not(.is-fullscreen) .ytb-speed-drawer {
+            bottom: calc(44px * var(--ytb-s, 1));
+          }
+          .ytb-speed-drawer.is-open {
+            opacity: 1;
+            transform: translate(-50%, 0);
             pointer-events: auto;
           }
-          .ytb-root.is-fullscreen .ytb-vol-popover {
-            left: calc(88px * var(--ytb-s, 1));
-            bottom: calc(62px * var(--ytb-s, 1));
-          }
-          .ytb-vol-popover.is-open {
-            display: flex;
-          }
-          .ytb-vol-pct {
-            height: calc(24px * var(--ytb-s, 1));
-            line-height: calc(24px * var(--ytb-s, 1));
-            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-            font-size: calc(11.5px * var(--ytb-s, 1));
-            font-weight: 500;
-            color: #e5e9ef;
-          }
-          .ytb-vol-track {
-            position: relative;
+          .ytb-speed-opt {
             width: 100%;
-            flex: 1;
-            display: flex;
-            justify-content: center;
+            height: calc(30px * var(--ytb-s, 1));
+            padding: 0 calc(8px * var(--ytb-s, 1));
+            border: none;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.9);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: calc(12.5px * var(--ytb-s, 1));
+            font-weight: 500;
             cursor: pointer;
-            touch-action: none;
+            text-align: center;
           }
-          .ytb-vol-bar-bg {
-            position: relative;
-            width: calc(2.5px * var(--ytb-s, 1));
-            height: 100%;
-            border-radius: 9999px;
-            background: rgba(255, 255, 255, 0.25);
-            pointer-events: none;
+          .ytb-speed-opt:active {
+            background: rgba(255, 255, 255, 0.1);
           }
-          .ytb-vol-fill {
-            position: absolute;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            height: 80%;
-            border-radius: 9999px;
-            background: #fb7299;
-          }
-          .ytb-vol-thumb {
-            position: absolute;
-            left: 50%;
-            bottom: 80%;
-            width: calc(11px * var(--ytb-s, 1));
-            height: calc(11px * var(--ytb-s, 1));
-            border-radius: 9999px;
-            background: #fb7299;
-            box-shadow: 0 0 0 calc(2px * var(--ytb-s, 1)) #ffffff;
-            transform: translate(-50%, 50%);
-            pointer-events: none;
+          .ytb-speed-opt.is-active {
+            color: #fb7299;
+            font-weight: 700;
           }
 
-          /* Right-Side Full-Height Speed Drawer */
-          .ytb-speed-drawer {
+          /* Floating Compact Quality Popover Anchored Above 画质 Button */
+          .ytb-quality-drawer {
+            position: absolute;
+            bottom: calc(58px * var(--ytb-s, 1));
+            left: 74%;
+            transform: translateX(-50%);
+            width: calc(126px * var(--ytb-s, 1));
+            max-height: 62%;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            z-index: 9;
+            padding: calc(5px * var(--ytb-s, 1)) 0;
+            border-radius: calc(8px * var(--ytb-s, 1));
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(18, 19, 25, 0.94);
+            backdrop-filter: blur(12px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.48);
+            display: none;
+            flex-direction: column;
+            align-items: stretch;
+            pointer-events: auto;
+          }
+          .ytb-root:not(.is-fullscreen) .ytb-quality-drawer {
+            bottom: calc(44px * var(--ytb-s, 1));
+          }
+          .ytb-quality-drawer.is-open {
+            display: flex;
+          }
+          .ytb-quality-opt {
+            width: 100%;
+            min-height: calc(30px * var(--ytb-s, 1));
+            padding: 0 calc(10px * var(--ytb-s, 1));
+            border: none;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.9);
+            font-size: calc(12px * var(--ytb-s, 1));
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: calc(6px * var(--ytb-s, 1));
+            text-align: left;
+            flex-shrink: 0;
+          }
+          .ytb-quality-opt:active {
+            background: rgba(255, 255, 255, 0.1);
+          }
+          .ytb-quality-opt.is-active {
+            color: #fb7299;
+            font-weight: 700;
+          }
+          .ytb-quality-opt.is-empty {
+            justify-content: center;
+            color: rgba(255, 255, 255, 0.55);
+            cursor: default;
+          }
+          .ytb-quality-badge {
+            font-size: calc(9.5px * var(--ytb-s, 1));
+            line-height: 1.3;
+            padding: 0 calc(4px * var(--ytb-s, 1));
+            border-radius: calc(3px * var(--ytb-s, 1));
+            background: rgba(251, 114, 153, 0.22);
+            color: #fb7299;
+            font-weight: 600;
+            flex-shrink: 0;
+          }
+
+          /* Right-Side Episode Selector Drawer (Crisp Instant Toggle, Zero Reflow Wobble) */
+          .ytb-ep-drawer {
             position: absolute;
             top: 0;
             right: 0;
             bottom: 0;
-            width: calc(106px * var(--ytb-s, 1));
-            z-index: 9;
-            padding: calc(10px * var(--ytb-s, 1)) calc(8px * var(--ytb-s, 1));
-            background: rgba(14, 14, 20, 0.9);
+            width: min(82%, calc(272px * var(--ytb-s, 1)));
+            z-index: 10;
+            padding: calc(12px * var(--ytb-s, 1));
+            background: rgba(16, 17, 23, 0.93);
             backdrop-filter: blur(12px);
             border-left: 1px solid rgba(255, 255, 255, 0.1);
-            display: flex;
+            display: none;
             flex-direction: column;
-            justify-content: center;
-            gap: calc(4px * var(--ytb-s, 1));
-            transform: translateX(105%);
-            transition: transform 0.18s ease;
+            gap: calc(8px * var(--ytb-s, 1));
             pointer-events: auto;
           }
-          .ytb-speed-drawer.is-open {
-            transform: translateX(0);
+          .ytb-ep-drawer.is-open {
+            display: flex;
           }
-          .ytb-speed-header {
-            font-size: calc(11.5px * var(--ytb-s, 1));
-            color: #a1a1aa;
-            text-align: center;
-            padding-bottom: calc(3px * var(--ytb-s, 1));
+          .ytb-ep-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding-bottom: calc(6px * var(--ytb-s, 1));
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            flex-shrink: 0;
           }
-          .ytb-speed-opt {
-            width: 100%;
-            height: calc(32px * var(--ytb-s, 1));
-            padding: 0 calc(8px * var(--ytb-s, 1));
-            border: none;
-            border-radius: calc(7px * var(--ytb-s, 1));
-            background: transparent;
+          .ytb-ep-drawer-title {
+            font-size: calc(12.5px * var(--ytb-s, 1));
+            font-weight: 700;
+            color: #ffffff;
+          }
+          .ytb-ep-drawer-sub {
+            font-size: calc(11px * var(--ytb-s, 1));
+            color: rgba(255, 255, 255, 0.62);
+          }
+          .ytb-ep-scroll {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: calc(6px * var(--ytb-s, 1));
+            overscroll-behavior: contain;
+          }
+          .ytb-ep-scroll.is-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            align-content: start;
+            gap: calc(6px * var(--ytb-s, 1));
+          }
+          .ytb-ep-item {
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.05);
             color: #e4e4e7;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-            font-size: calc(13px * var(--ytb-s, 1));
-            font-weight: 500;
+            border-radius: calc(7px * var(--ytb-s, 1));
             cursor: pointer;
-            text-align: center;
+            text-align: left;
+            flex-shrink: 0;
           }
-          .ytb-speed-opt.is-active {
-            background: rgba(251, 114, 153, 0.22);
+          .ytb-ep-item.is-active {
+            background: rgba(251, 114, 153, 0.2);
+            border-color: rgba(251, 114, 153, 0.7);
+            color: #ffffff;
+          }
+          .ytb-ep-list-item {
+            padding: calc(6px * var(--ytb-s, 1)) calc(8px * var(--ytb-s, 1));
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: calc(8px * var(--ytb-s, 1));
+          }
+          .ytb-ep-thumb {
+            width: calc(76px * var(--ytb-s, 1));
+            height: calc(43px * var(--ytb-s, 1));
+            border-radius: calc(5px * var(--ytb-s, 1));
+            object-fit: cover;
+            flex-shrink: 0;
+            background: rgba(255, 255, 255, 0.08);
+          }
+          .ytb-ep-list-body {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: calc(2px * var(--ytb-s, 1));
+          }
+          .ytb-ep-list-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: calc(10.5px * var(--ytb-s, 1));
+            color: rgba(255, 255, 255, 0.62);
+          }
+          .ytb-ep-item.is-active .ytb-ep-list-top {
             color: #fb7299;
             font-weight: 700;
+          }
+          .ytb-ep-list-title {
+            font-size: calc(11.5px * var(--ytb-s, 1));
+            line-height: 1.35;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+          }
+          .ytb-ep-grid-item {
+            height: calc(38px * var(--ytb-s, 1));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            font-size: calc(12.5px * var(--ytb-s, 1));
+            font-weight: 600;
+            text-align: center;
+          }
+          .ytb-ep-item.is-active.ytb-ep-grid-item {
+            color: #fb7299;
+          }
+          .ytb-ep-badge {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            font-size: 9px;
+            padding: 0 3px;
+            border-radius: 3px;
+            background: #fb7299;
+            color: #ffffff;
           }
         </style>
         <div id="ytbRoot" class="ytb-root">
           <div id="ytbShield" class="ytb-shield">
             <div id="ytbVolZone" class="ytb-vol-zone"></div>
           </div>
-          <div id="ytbBoostChip" class="ytb-boost-chip">» 2.0x</div>
+          <div id="ytbBoostChip" class="ytb-boost-chip">
+            <span class="ytb-boost-arrows">▶▶</span>
+            <span id="ytbBoostText">2.0x 倍速播放中</span>
+            <span id="ytbBoostHint" class="ytb-boost-hint">上滑锁定</span>
+          </div>
           <button id="ytbUnmutePill" class="ytb-unmute-pill" type="button">🔇 点此开声</button>
           <button id="ytbReturnPill" class="ytb-return-pill" type="button">✨ 触屏栏</button>
+          <button id="ytbLockBtn" class="ytb-lock-btn" type="button" aria-label="锁屏">${LOCK_OPEN_SVG}</button>
           <div id="ytbPlayFlash" class="ytb-play-flash"></div>
           <div id="ytbGestureHud" class="ytb-gesture-hud">
             <div id="ytbHudMain" class="ytb-hud-main"></div>
@@ -2740,6 +3801,7 @@
 
           <!-- Windowed Top-Right Floating Actions -->
           <div id="ytbWinTop" class="ytb-win-top">
+            <button id="ytbWinEpBtn" class="ytb-ghost-btn is-hidden" type="button">选集</button>
             <button id="ytbWinDmBtn" class="ytb-icon-btn ytb-btn-dm ytb-btn-dm-win" type="button" aria-label="弹幕开关">${DM_ON_SVG}</button>
             <button id="ytbWinNativeBtn" class="ytb-ghost-btn" type="button">原栏</button>
           </div>
@@ -2756,17 +3818,16 @@
             </div>
           </div>
 
-          <div id="ytbVolPopover" class="ytb-vol-popover">
-            <div id="ytbVolPct" class="ytb-vol-pct">80</div>
-            <div id="ytbVolTrack" class="ytb-vol-track">
-              <div class="ytb-vol-bar-bg">
-                <div id="ytbVolFill" class="ytb-vol-fill"></div>
-                <div id="ytbVolThumb" class="ytb-vol-thumb"></div>
-              </div>
-            </div>
-          </div>
-
           <div id="ytbSpeedDrawer" class="ytb-speed-drawer"></div>
+          <div id="ytbQualityDrawer" class="ytb-quality-drawer"></div>
+
+          <div id="ytbEpDrawer" class="ytb-ep-drawer">
+            <div class="ytb-ep-header">
+              <span id="ytbEpDrawerTitle" class="ytb-ep-drawer-title">选集</span>
+              <span id="ytbEpDrawerSub" class="ytb-ep-drawer-sub"></span>
+            </div>
+            <div id="ytbEpList" class="ytb-ep-scroll"></div>
+          </div>
 
           <div id="ytbBottomBar" class="ytb-bottom-bar">
             <!-- Fullscreen App 2-Tier Layout -->
@@ -2782,11 +3843,14 @@
               </div>
               <div class="ytb-tier-2">
                 <div class="ytb-left-actions">
+                  <button id="ytbPrevBtn" class="ytb-icon-btn ytb-btn-prev is-hidden" type="button" aria-label="上一集">${PREV_SVG}</button>
                   <button id="ytbPlayBtn" class="ytb-icon-btn ytb-btn-play" type="button" aria-label="播放">${PLAY_SVG}</button>
+                  <button id="ytbNextBtn" class="ytb-icon-btn ytb-btn-next is-hidden" type="button" aria-label="下一集">${NEXT_SVG}</button>
                   <button id="ytbDmBtn" class="ytb-icon-btn ytb-btn-dm" type="button" aria-label="弹幕开关">${DM_ON_SVG}</button>
-                  <button id="ytbVolBtn" class="ytb-icon-btn ytb-btn-vol" type="button" aria-label="音量">${VOL_ON_SVG}</button>
                 </div>
                 <div class="ytb-right-actions">
+                  <button id="ytbEpBtn" class="ytb-icon-btn ytb-btn-ep is-hidden" type="button">选集</button>
+                  <button id="ytbQualityBtn" class="ytb-icon-btn ytb-btn-quality is-hidden" type="button">画质</button>
                   <button id="ytbSpeedBtn" class="ytb-icon-btn ytb-btn-speed" type="button">倍速</button>
                   <button id="ytbFullBtn" class="ytb-icon-btn ytb-btn-full" type="button" aria-label="退出全屏">${FULL_EXIT_SVG}</button>
                 </div>
@@ -2803,7 +3867,7 @@
                 </div>
               </div>
               <span id="ytbWinTime" class="ytb-time">00:00/00:00</span>
-              <button id="ytbWinVolBtn" class="ytb-icon-btn ytb-btn-vol" type="button" aria-label="音量">${VOL_ON_SVG}</button>
+              <button id="ytbWinQualityBtn" class="ytb-icon-btn ytb-btn-quality is-hidden" type="button">画质</button>
               <button id="ytbWinSpeedBtn" class="ytb-icon-btn ytb-btn-speed" type="button">倍速</button>
               <button id="ytbWinFullBtn" class="ytb-icon-btn ytb-btn-full" type="button" aria-label="全屏">${FULL_ENTER_SVG}</button>
             </div>
@@ -2815,8 +3879,11 @@
         shield: shadow.getElementById("ytbShield"),
         volZone: shadow.getElementById("ytbVolZone"),
         boostChip: shadow.getElementById("ytbBoostChip"),
+        boostText: shadow.getElementById("ytbBoostText"),
+        boostHint: shadow.getElementById("ytbBoostHint"),
         unmutePill: shadow.getElementById("ytbUnmutePill"),
         returnPill: shadow.getElementById("ytbReturnPill"),
+        lockBtn: shadow.getElementById("ytbLockBtn"),
         playFlash: shadow.getElementById("ytbPlayFlash"),
         gestureHud: shadow.getElementById("ytbGestureHud"),
         hudMain: shadow.getElementById("ytbHudMain"),
@@ -2834,6 +3901,7 @@
         miniProgressFill: shadow.getElementById("ytbMiniProgressFill"),
         miniToast: shadow.getElementById("ytbMiniToast"),
         winTop: shadow.getElementById("ytbWinTop"),
+        winEpBtn: shadow.getElementById("ytbWinEpBtn"),
         winDmBtn: shadow.getElementById("ytbWinDmBtn"),
         winNativeBtn: shadow.getElementById("ytbWinNativeBtn"),
         topBar: shadow.getElementById("ytbTopBar"),
@@ -2841,20 +3909,23 @@
         title: shadow.getElementById("ytbTitle"),
         syncBadge: shadow.getElementById("ytbSyncBadge"),
         nativeBtn: shadow.getElementById("ytbNativeBtn"),
-        volPopover: shadow.getElementById("ytbVolPopover"),
-        volPct: shadow.getElementById("ytbVolPct"),
-        volTrack: shadow.getElementById("ytbVolTrack"),
-        volFill: shadow.getElementById("ytbVolFill"),
-        volThumb: shadow.getElementById("ytbVolThumb"),
         speedDrawer: shadow.getElementById("ytbSpeedDrawer"),
+        qualityDrawer: shadow.getElementById("ytbQualityDrawer"),
+        epDrawer: shadow.getElementById("ytbEpDrawer"),
+        epDrawerTitle: shadow.getElementById("ytbEpDrawerTitle"),
+        epDrawerSub: shadow.getElementById("ytbEpDrawerSub"),
+        epList: shadow.getElementById("ytbEpList"),
         bottomBar: shadow.getElementById("ytbBottomBar"),
         timeText: shadow.getElementById("ytbTime"),
         progressWrap: shadow.getElementById("ytbProgressWrap"),
         progressFill: shadow.getElementById("ytbProgressFill"),
         progressThumb: shadow.getElementById("ytbProgressThumb"),
+        prevBtn: shadow.getElementById("ytbPrevBtn"),
         playBtn: shadow.getElementById("ytbPlayBtn"),
+        nextBtn: shadow.getElementById("ytbNextBtn"),
         dmBtn: shadow.getElementById("ytbDmBtn"),
-        volBtn: shadow.getElementById("ytbVolBtn"),
+        epBtn: shadow.getElementById("ytbEpBtn"),
+        qualityBtn: shadow.getElementById("ytbQualityBtn"),
         speedBtn: shadow.getElementById("ytbSpeedBtn"),
         fullBtn: shadow.getElementById("ytbFullBtn"),
         winPlayBtn: shadow.getElementById("ytbWinPlayBtn"),
@@ -2862,7 +3933,7 @@
         winProgressFill: shadow.getElementById("ytbWinProgressFill"),
         winProgressThumb: shadow.getElementById("ytbWinProgressThumb"),
         winTime: shadow.getElementById("ytbWinTime"),
-        winVolBtn: shadow.getElementById("ytbWinVolBtn"),
+        winQualityBtn: shadow.getElementById("ytbWinQualityBtn"),
         winSpeedBtn: shadow.getElementById("ytbWinSpeedBtn"),
         winFullBtn: shadow.getElementById("ytbWinFullBtn"),
       };
@@ -2891,8 +3962,10 @@
       syncPlaybackUi();
       syncVolumeUi();
       syncDanmakuUi();
+      syncQualityUi();
       syncRateUi();
       syncTopBar();
+      refreshVideoContext({ skipAlive: true });
       scheduleVideoshotPreload(1200);
       return true;
     }
@@ -2900,7 +3973,7 @@
     function scheduleMountRetry(attempt = 0) {
       clearTimeout(mountRetryTimer);
       mountRetryTimer = null;
-      if (!enabled || (host && host.isConnected) || attempt >= 12) return;
+      if (!enabled || (host && host.isConnected) || attempt >= 35) return;
       mountRetryTimer = setTimeout(() => {
         mountRetryTimer = null;
         if (!enabled) return;
@@ -2910,6 +3983,25 @@
           scheduleMountRetry(attempt + 1);
         }
       }, 400);
+    }
+
+    function ensureAlive() {
+      if (!enabled) return false;
+      const video = adapter?.getVideoElement?.() || null;
+      const nextContainer = findPlayerContainer(video);
+      const detached =
+        !host ||
+        !host.isConnected ||
+        !currentContainer ||
+        currentVideo?.isConnected === false ||
+        (nextContainer && nextContainer !== currentContainer);
+      if (!detached) return true;
+      if (ensureMounted()) {
+        setNativeBarMode(nativeBarMode);
+        return true;
+      }
+      scheduleMountRetry(0);
+      return false;
     }
 
     function enable({ startNative = false } = {}) {
@@ -2933,19 +4025,24 @@
 
     function disable() {
       if (gestureMode === "boost") {
-        releaseBoost();
+        releaseBoost({ cancelLock: true });
       }
+      clearLockedBoostSpeed({ restore: false });
       enabled = false;
       nativeBarMode = false;
+      hadSystemFullscreen = false;
+      exitDocFullscreenWithOrientation();
       hudVisible = false;
       speedDrawerOpen = false;
-      volumePopoverOpen = false;
+      qualityDrawerOpen = false;
+      episodeDrawerOpen = false;
+      screenLocked = false;
+      lockAwake = false;
+      boostLockArmed = false;
       endingPassthrough = false;
       userMuted = false;
       draggingSeek = false;
-      draggingVolume = false;
       activeScrubPointerId = null;
-      activeVolPointerId = null;
       activeScrubWrap = null;
       activeScrubContext = null;
       lastDrawnFrameKey = "";
@@ -2953,10 +4050,13 @@
       hasPaintedScrubFrame = false;
       activePointerId = null;
       gestureMode = "idle";
+      lastEpisodeRefKey = "";
+      lastEpisodeRenderKey = "";
+      lastActiveEpBtn = null;
+      currentEpisodeData = null;
       clearTimers();
       clearDecodedSheets();
       unbindScrubWindowEvents();
-      unbindVolWindowEvents();
       unbindBoostGlobalRelease();
       unbindGlobalEvents();
       unbindContainerShield();
@@ -2968,13 +4068,25 @@
         host.parentNode.removeChild(host);
       }
       if (els.root) {
-        els.root.classList.remove("is-hud-open", "is-native-mode", "is-fullscreen", "is-ending-passthrough");
+        els.root.classList.remove(
+          "is-hud-open",
+          "is-native-mode",
+          "is-fullscreen",
+          "is-ending-passthrough",
+          "is-locked",
+          "is-lock-awake",
+          "is-ep-open"
+        );
       }
       if (els.unmutePill) els.unmutePill.classList.remove("is-visible");
-      if (els.boostChip) els.boostChip.classList.remove("is-visible");
+      if (els.boostChip) {
+        els.boostChip.classList.remove("is-visible", "is-lock-armed", "is-locked-speed", "is-locked-compact");
+      }
       if (els.miniToast) els.miniToast.classList.remove("is-visible");
       if (els.playFlash) els.playFlash.classList.remove("is-visible");
-      if (els.volPopover) els.volPopover.classList.remove("is-open");
+      if (els.speedDrawer) els.speedDrawer.classList.remove("is-open");
+      if (els.qualityDrawer) els.qualityDrawer.classList.remove("is-open");
+      if (els.epDrawer) els.epDrawer.classList.remove("is-open");
       if (els.gestureHud) els.gestureHud.classList.remove("is-visible");
       if (els.scrubPreview) els.scrubPreview.classList.remove("is-visible");
     }
@@ -2982,6 +4094,9 @@
     function updateRate(rate) {
       if (typeof rate !== "number" || !Number.isFinite(rate)) return;
       baseRate = rate;
+      if (speedLockedByBoost && Math.abs(rate - 2.0) > 0.05) {
+        clearLockedBoostSpeed({ restore: false });
+      }
       if (enabled) syncRateUi();
     }
 
@@ -3001,10 +4116,13 @@
       enterNativeMode: () => {
         if (enabled) setNativeBarMode(true);
       },
+      ensureAlive,
+      refreshVideoContext,
       updateRate,
       setActiveCount,
       isActive: () => enabled,
       isNativeBarMode: () => nativeBarMode,
+      isScreenLocked: () => screenLocked,
     };
   }
 
